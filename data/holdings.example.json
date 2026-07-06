@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "baseCurrency": "JPY",
+    "note": "サンプル。data/holdings.example.json を data/holdings.json にコピーして、自分の保有に書き換えて使う。実データ(holdings.json)は .gitignore で公開対象外。",
+    "modes": {
+      "market": "評価額 = quantity × 価格(symbol)。上場株向け。price 未取得の間は baseValue で表示。",
+      "proxy": "評価額 = baseValue × 価格(symbol) / baseDate時点の価格。投信/DC/指数近似向け。",
+      "manual": "評価額は baseValue のまま固定（自動更新しない）。非上場など価格の取れないもの向け。"
+    },
+    "baseDate": "2026-01-01"
+  },
+  "holdings": [
+    {
+      "name": "国内株の例",
+      "type": "国内株",
+      "mode": "market",
+      "symbol": "7203.T",
+      "quantity": 100,
+      "baseValue": 300000
+    },
+    {
+      "name": "米国株の例",
+      "type": "米国株",
+      "mode": "market",
+      "symbol": "AAPL",
+      "currency": "USD",
+      "quantity": 10,
+      "baseValue": 300000,
+      "note": "currency=USD にすると その日の USD/JPY 始値(JPY=X)で円換算される"
+    },
+    {
+      "name": "全世界株インデックス投信の例",
+      "type": "投信",
+      "mode": "proxy",
+      "symbol": "2559.T",
+      "baseValue": 500000,
+      "proxyNote": "連動指数(ここでは MAXIS全世界株式)の日次変化率で評価額をドリフトさせる近似"
+    },
+    {
+      "name": "非上場・その他の例",
+      "type": "非上場",
+      "mode": "manual",
+      "symbol": null,
+      "baseValue": 100000,
+      "manualNote": "価格が取れないものは manual。値を変えたい時は baseValue を手で更新する"
+    }
+  ]
+}
