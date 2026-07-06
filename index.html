@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>heatfolio</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #151b24; --line: #232b36;
+    --text: #e6eaf0; --muted: #8b97a8; --dim: #5a6473;
+    --base: #1a1f29; --gain: #159a5b; --loss: #d23f4a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 18px 48px; }
+  .eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+  .total { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .gain { color: #34d399; } .loss { color: #fb7185; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
+  .seg button {
+    background: transparent; color: var(--muted); border: 0; cursor: pointer;
+    font-size: 13px; padding: 6px 12px; border-radius: 6px; font-family: inherit;
+  }
+  .seg button.on { background: var(--text); color: #0d1015; font-weight: 600; }
+  .datepick { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .datepick label { font-size: 12px; color: var(--dim); }
+  input[type=date] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 8px; font-family: inherit; font-size: 13px;
+    color-scheme: dark;
+  }
+  #map { width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: #0b0e13; }
+  .legend { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .bar { height: 8px; width: 96px; border-radius: 99px;
+    background: linear-gradient(90deg, var(--loss), var(--base), var(--gain)); }
+  .note { font-size: 11px; color: var(--dim); margin-top: 14px; line-height: 1.7; }
+  .msg { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 14px; }
+  a { color: #7cc4ff; }
+  .addbtn { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 6px 12px; font-size: 13px; cursor: pointer; font-family: inherit; }
+  .addbtn:hover { border-color: var(--muted); }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .overlay.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    width: min(420px, 100%); padding: 20px; max-height: 90vh; overflow: auto; }
+  .modal h3 { margin: 0 0 14px; font-size: 16px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field select { width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+    font-family: inherit; font-size: 14px; color-scheme: dark; }
+  .field.hidden { display: none; }
+  .hint { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .btn { border: 0; border-radius: 8px; padding: 9px 14px; font-size: 14px;
+    font-family: inherit; cursor: pointer; }
+  .btn-primary { background: var(--text); color: #0d1015; font-weight: 600; flex: 1; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .btn-danger { background: transparent; color: var(--loss); border: 1px solid var(--loss); flex: 1; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--gain); color: #fff; padding: 10px 18px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: opacity .2s; z-index: 60; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--loss); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">heatfolio</div>
+  <div class="head">
+    <div>
+      <div class="total" id="total">—</div>
+      <div class="sub" id="subtotal"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="period">
+      <button data-p="1"   class="on">前日</button>
+      <button data-p="7">1W</button>
+      <button data-p="30">1M</button>
+      <button data-p="365">1Y</button>
+    </div>
+    <button class="addbtn" id="addBtn">＋ 銘柄を追加</button>
+    <div class="datepick">
+      <label for="asof">基準日</label>
+      <input type="date" id="asof" />
+    </div>
+  </div>
+
+  <div id="map"><div class="msg" id="msg">読み込み中…</div></div>
+
+  <div class="legend">
+    <span id="legendLabel">色 = 前日比</span>
+    <span style="display:flex;align-items:center;gap:8px;">
+      <span class="loss">− マイナス</span><span class="bar"></span><span class="gain">プラス +</span>
+    </span>
+  </div>
+
+  <div class="note" id="footnote"></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="modalTitle">銘柄を編集</h3>
+    <div class="field">
+      <label for="f_name">銘柄名</label>
+      <input id="f_name" type="text" placeholder="例: NTT" />
+    </div>
+    <div class="field">
+      <label for="f_type">分類（メモ・任意）</label>
+      <input id="f_type" type="text" placeholder="国内株 / 投信 / 確定拠出年金 …" />
+    </div>
+    <div class="field">
+      <label for="f_mode">評価方法</label>
+      <select id="f_mode">
+        <option value="market">market（上場株：数量 × 価格）</option>
+        <option value="proxy">proxy（投信/DC：指数で近似）</option>
+        <option value="manual">manual（固定：非上場など）</option>
+      </select>
+    </div>
+    <div class="field" id="fld_symbol">
+      <label for="f_symbol">シンボル（Yahoo）</label>
+      <input id="f_symbol" type="text" placeholder="9432.T / ^N225 / 2559.T / ^GSPC" />
+      <div class="hint">価格取得に使う銘柄コード。market/proxy で必要</div>
+    </div>
+    <div class="field" id="fld_currency">
+      <label for="f_currency">通貨</label>
+      <select id="f_currency">
+        <option value="JPY">円（JPY）</option>
+        <option value="USD">米ドル（USD）— その日の USD/JPY 始値で円換算</option>
+      </select>
+    </div>
+    <div class="field" id="fld_qty">
+      <label for="f_qty">数量</label>
+      <input id="f_qty" type="number" step="any" placeholder="例: 100" />
+    </div>
+    <div class="field">
+      <label for="f_base">評価額（円）</label>
+      <input id="f_base" type="number" step="any" placeholder="例: 14700" />
+      <div class="hint" id="baseHint"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="saveBtn">保存</button>
+      <button class="btn btn-ghost" id="cancelBtn">キャンセル</button>
+    </div>
+    <div class="modal-actions" id="deleteRow">
+      <button class="btn btn-danger" id="deleteBtn">この銘柄を削除</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const W_RATIO = 0.6;
+const state = { period: 1, asof: null, holdings: [], prices: {}, dates: [], baseDate: null, doc: null };
+
+// ---------- 色 ----------
+function lerp(a, b, t) {
+  const p = s => [1,3,5].map(i => parseInt(s.substr(i,2),16));
+  const [ar,ag,ab]=p(a),[br,bg,bb]=p(b);
+  const r=Math.round(ar+(br-ar)*t),g=Math.round(ag+(bg-ag)*t),bl=Math.round(ab+(bb-ab)*t);
+  return `rgb(${r},${g},${bl})`;
+}
+const BASE="#1a1f29",GAIN="#159a5b",LOSS="#d23f4a";
+function colorFor(pct, period){
+  if(pct==null) return "#2a303b";
+  const cap = period===1 ? 2 : (period===7 ? 5 : (period===30 ? 10 : 30));
+  const t = Math.max(-1, Math.min(1, pct/cap));
+  return t>=0 ? lerp(BASE,GAIN,t) : lerp(BASE,LOSS,-t);
+}
+const yen = n => Math.round(n).toLocaleString("ja-JP");
+const pctStr = p => p==null ? "—" : `${p>=0?"+":""}${p.toFixed(2)}%`;
+
+// ---------- 価格参照 ----------
+function priceAt(sym, date){
+  const ds = state.dates;
+  for(let i=ds.length-1;i>=0;i--){
+    if(ds[i]<=date){ const v=state.prices[ds[i]]?.[sym]; if(v!=null) return v; }
+  }
+  return null;
+}
+function anchorPrice(sym){
+  const at = priceAt(sym, state.baseDate);
+  if(at!=null) return at;
+  for(const d of state.dates){ const v=state.prices[d]?.[sym]; if(v!=null) return v; }
+  return null;
+}
+function fxAt(date){ return priceAt("JPY=X", date); }   // その日のUSD/JPY始値（円/ドル）
+function valueAt(h, date){
+  if(h.mode==="manual") return h.baseValue;
+  const p = priceAt(h.symbol, date);
+  if(p==null) return h.baseValue;                 // 価格が未取得ならbaseValueで表示
+  if(h.mode==="market"){
+    if(h.currency==="USD"){
+      const fx = fxAt(date);
+      if(fx==null) return h.baseValue;            // USD/JPY未取得なら登録額で表示
+      return h.quantity * p * fx;                 // ドル建て: 数量 × ドル株価 × その日のUSD/JPY始値
+    }
+    return h.quantity * p;
+  }
+  const a = anchorPrice(h.symbol);
+  if(a==null || a===0) return h.baseValue;
+  return h.baseValue * p / a;                      // proxy: baseDate比でドリフト
+}
+// 基準日 asof に対して period 日前の参照日を探して騰落率を返す
+function pctFor(h, asof, period){
+  if(h.mode==="manual") return null;              // 非追跡は「—」
+  const cutoff = new Date(asof); cutoff.setDate(cutoff.getDate()-period);
+  const cut = cutoff.toISOString().slice(0,10);
+  let refDate=null;
+  for(let i=state.dates.length-1;i>=0;i--){ if(state.dates[i]<=cut){ refDate=state.dates[i]; break; } }
+  if(!refDate) return null;
+  const now=valueAt(h,asof), ref=valueAt(h,refDate);
+  if(ref==null||ref===0) return null;
+  return (now/ref-1)*100;
+}
+
+// ---------- squarified treemap ----------
+function squarify(items, x, y, w, h){
+  const total=items.reduce((s,i)=>s+i.value,0);
+  if(total<=0) return [];
+  const scale=(w*h)/total;
+  const scaled=items.map(i=>({...i,area:i.value*scale})).sort((a,b)=>b.area-a.area);
+  const out=[]; let rx=x,ry=y,rw=w,rh=h,row=[];
+  const short=()=>Math.min(rw,rh);
+  const worst=(r,len)=>{ if(!r.length) return Infinity;
+    const s=r.reduce((a,c)=>a+c.area,0),mx=Math.max(...r.map(o=>o.area)),mn=Math.min(...r.map(o=>o.area));
+    return Math.max(len*len*mx/(s*s),(s*s)/(len*len*mn)); };
+  const lay=r=>{ const s=r.reduce((a,c)=>a+c.area,0);
+    if(rw>=rh){ const cw=s/rh; let cy=ry; r.forEach(it=>{const ih=it.area/cw; out.push({...it,x:rx,y:cy,w:cw,h:ih}); cy+=ih;}); rx+=cw; rw-=cw; }
+    else { const rHh=s/rw; let cx=rx; r.forEach(it=>{const iw=it.area/rHh; out.push({...it,x:cx,y:ry,w:iw,h:rHh}); cx+=iw;}); ry+=rHh; rh-=rHh; } };
+  let i=0;
+  while(i<scaled.length){ const it=scaled[i]; const len=short();
+    if(!row.length||worst([...row,it],len)<=worst(row,len)){ row.push(it); i++; } else { lay(row); row=[]; } }
+  if(row.length) lay(row);
+  return out;
+}
+
+// ---------- 描画 ----------
+function render(){
+  const el=document.getElementById("map");
+  const W=el.clientWidth||700, H=Math.max(420, Math.round(W*W_RATIO));
+  const asof=state.asof;
+
+  const enriched=state.holdings.map((h,idx)=>({
+    ...h, _idx: idx, value: valueAt(h, asof), pct: pctFor(h, asof, state.period)
+  })).filter(h=>h.value>0);
+
+  const total=enriched.reduce((s,h)=>s+h.value,0);
+  document.getElementById("total").textContent="¥"+yen(total);
+
+  // 期間損益（追跡できるものだけ）
+  let dNow=0,dRef=0;
+  enriched.forEach(h=>{ if(h.pct!=null){ dNow+=h.value; dRef+=h.value/(1+h.pct/100); } });
+  const totPct = dRef>0 ? (dNow/dRef-1)*100 : null;
+  const st=document.getElementById("subtotal");
+  const label=({1:"前日比",7:"1週間",30:"1ヶ月",365:"1年"})[state.period];
+  st.innerHTML = totPct==null ? `<span style="color:var(--dim)">${label}の比較データがまだありません（履歴が溜まると表示）</span>`
+    : `<span class="${totPct>=0?'gain':'loss'}">${pctStr(totPct)}</span> <span style="color:var(--dim)">${label}（価格取得分のみ）</span>`;
+  document.getElementById("legendLabel").textContent="色 = "+label;
+
+  const tiles=squarify(enriched.map(h=>({...h,value:h.value})),0,0,W,H);
+  const svgns="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(svgns,"svg");
+  svg.setAttribute("width",W); svg.setAttribute("height",H); svg.style.display="block";
+
+  tiles.forEach(t=>{
+    const big=t.w>78&&t.h>50, mid=t.w>54&&t.h>32;
+    const fs=Math.max(11,Math.min(18,Math.sqrt(t.w*t.h)/8));
+    const g=document.createElementNS(svgns,"g");
+    const rect=document.createElementNS(svgns,"rect");
+    rect.setAttribute("x",t.x+1); rect.setAttribute("y",t.y+1);
+    rect.setAttribute("width",Math.max(0,t.w-2)); rect.setAttribute("height",Math.max(0,t.h-2));
+    rect.setAttribute("rx",5); rect.setAttribute("fill",colorFor(t.pct,state.period));
+    rect.setAttribute("stroke","#0b0e13"); rect.setAttribute("stroke-width",1);
+    rect.style.cursor="pointer";
+    rect.addEventListener("click",()=>openEditor(t._idx));
+    const title=document.createElementNS(svgns,"title");
+    title.textContent=`${t.name} / ¥${yen(t.value)} / ${pctStr(t.pct)}`;
+    rect.appendChild(title); g.appendChild(rect);
+    // ラベルは foreignObject(HTML) で描画し、長い銘柄名はタイル幅で自動折り返しする
+    if(mid){
+      const XHTML="http://www.w3.org/1999/xhtml";
+      const fo=document.createElementNS(svgns,"foreignObject");
+      fo.setAttribute("x",t.x+1); fo.setAttribute("y",t.y+1);
+      fo.setAttribute("width",Math.max(0,t.w-2)); fo.setAttribute("height",Math.max(0,t.h-2));
+      fo.style.pointerEvents="none"; // クリックは下の rect に通す
+      const box=document.createElementNS(XHTML,"div");
+      box.setAttribute("style",`box-sizing:border-box;width:100%;height:100%;padding:6px 8px;`+
+        `display:flex;flex-direction:column;overflow:hidden;color:#fff;font-family:inherit;`+
+        `font-size:${fs}px;line-height:1.15;`);
+      const nameEl=document.createElementNS(XHTML,"div");
+      nameEl.textContent=t.name;
+      nameEl.setAttribute("style","font-weight:600;overflow-wrap:anywhere;word-break:break-word;overflow:hidden;");
+      box.appendChild(nameEl);
+      if(big){
+        const valEl=document.createElementNS(XHTML,"div");
+        valEl.textContent="¥"+yen(t.value);
+        valEl.setAttribute("style",`margin-top:2px;font-size:${Math.max(10,fs-3)}px;`+
+          `color:rgba(255,255,255,.82);font-variant-numeric:tabular-nums;`);
+        box.appendChild(valEl);
+      }
+      const pctEl=document.createElementNS(XHTML,"div");
+      pctEl.textContent=pctStr(t.pct);
+      pctEl.setAttribute("style",`margin-top:auto;font-weight:700;font-size:${Math.max(10,fs-1)}px;`+
+        `font-variant-numeric:tabular-nums;`);
+      box.appendChild(pctEl);
+      fo.appendChild(box);
+      g.appendChild(fo);
+    }
+    svg.appendChild(g);
+  });
+  el.innerHTML=""; el.appendChild(svg);
+
+  const latest=state.dates.length?state.dates[state.dates.length-1]:state.baseDate;
+  document.getElementById("footnote").innerHTML =
+    `基準日 ${asof}（最新データ: ${latest||"未取得"}）｜面積=評価額、色=${label}。`+
+    `投信/DC/非上場は指数近似または固定値です。価格が未取得の項目は登録時の評価額で表示しています。`;
+}
+
+// ---------- 初期化 ----------
+function setPeriod(p){ state.period=p;
+  document.querySelectorAll("#period button").forEach(b=>b.classList.toggle("on",Number(b.dataset.p)===p));
+  render();
+}
+// ---------- 編集 ----------
+let editIndex=null;      // 編集中の holdings index。新規追加は null
+let deleteArmed=false;   // 削除の二段階確認フラグ
+
+function toast(msg,isErr){
+  const t=document.getElementById("toast");
+  t.textContent=msg; t.classList.toggle("err",!!isErr); t.classList.add("show");
+  clearTimeout(t._timer); t._timer=setTimeout(()=>t.classList.remove("show"),1800);
+}
+function updateModeFields(){
+  const mode=document.getElementById("f_mode").value;
+  document.getElementById("fld_symbol").classList.toggle("hidden",mode==="manual");
+  document.getElementById("fld_qty").classList.toggle("hidden",mode==="manual");
+  document.getElementById("fld_currency").classList.toggle("hidden",mode!=="market"); // 円換算は market のみ
+  const hints={
+    market:"上場株。数量 × 価格で自動計算。価格が未取得の間はこの評価額で表示",
+    proxy:"投信/DC。この評価額を指数の変化率でドリフトさせて近似",
+    manual:"非上場など。この評価額のまま固定（自動更新なし）"
+  };
+  document.getElementById("baseHint").textContent=hints[mode]||"";
+}
+function openEditor(idx){
+  editIndex=(idx==null?null:idx); deleteArmed=false;
+  const h=idx==null?{}:state.holdings[idx];
+  document.getElementById("modalTitle").textContent=idx==null?"銘柄を追加":"銘柄を編集";
+  document.getElementById("f_name").value=h.name||"";
+  document.getElementById("f_type").value=h.type||"";
+  document.getElementById("f_mode").value=h.mode||"market";
+  document.getElementById("f_symbol").value=h.symbol||"";
+  document.getElementById("f_currency").value=(h.currency||"JPY");
+  document.getElementById("f_qty").value=(h.quantity==null?"":h.quantity);
+  document.getElementById("f_base").value=(h.baseValue==null?"":h.baseValue);
+  document.getElementById("deleteRow").style.display=idx==null?"none":"flex";
+  document.getElementById("deleteBtn").textContent="この銘柄を削除";
+  updateModeFields();
+  document.getElementById("overlay").classList.add("open");
+  document.getElementById("f_name").focus();
+}
+function closeEditor(){ document.getElementById("overlay").classList.remove("open"); }
+
+async function postDoc(){
+  const res=await fetch("/api/holdings",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(state.doc)
+  });
+  let j={}; try{ j=await res.json(); }catch(e){}
+  if(!res.ok||!j.ok) throw new Error(j.error||("HTTP "+res.status));
+}
+async function onSave(){
+  const name=document.getElementById("f_name").value.trim();
+  const mode=document.getElementById("f_mode").value;
+  const type=document.getElementById("f_type").value.trim();
+  const symbolRaw=document.getElementById("f_symbol").value.trim();
+  const qtyRaw=document.getElementById("f_qty").value.trim();
+  const baseRaw=document.getElementById("f_base").value.trim();
+  if(!name){ toast("銘柄名を入力してください",true); return; }
+  const baseValue=Number(baseRaw);
+  if(baseRaw===""||!isFinite(baseValue)){ toast("評価額を数値で入力してください",true); return; }
+  if(mode!=="manual"&&!symbolRaw){ toast("シンボルを入力してください（manual 以外は必要）",true); return; }
+  const currencyVal=document.getElementById("f_currency").value;
+  const base=editIndex==null?{}:{...state.holdings[editIndex]};  // 既存の未知フィールド(proxyNote等)を保持
+  base.name=name; base.type=type; base.mode=mode;
+  base.symbol=mode==="manual"?null:symbolRaw;
+  base.quantity=(qtyRaw===""?(mode==="manual"?(base.quantity??null):null):Number(qtyRaw));
+  if(mode==="market" && currencyVal==="USD") base.currency="USD"; else delete base.currency;  // 円は既定(フィールド省略)
+  base.baseValue=baseValue;
+  const snapshot=state.holdings.slice();
+  if(editIndex==null) state.holdings.push(base); else state.holdings[editIndex]=base;
+  state.doc.holdings=state.holdings;
+  const btn=document.getElementById("saveBtn"); btn.disabled=true; btn.textContent="保存中…";
+  try{ await postDoc(); closeEditor(); render(); toast("保存しました"); }
+  catch(e){ state.holdings=snapshot; state.doc.holdings=snapshot; render(); toast("保存に失敗: "+e.message,true); }
+  finally{ btn.disabled=false; btn.textContent="保存"; }
+}
+async function onDelete(){
+  if(editIndex==null) return;
+  const btn=document.getElementById("deleteBtn");
+  if(!deleteArmed){ deleteArmed=true; btn.textContent="もう一度押すと削除"; return; }
+  const snapshot=state.holdings.slice();
+  state.holdings.splice(editIndex,1); state.doc.holdings=state.holdings;
+  btn.disabled=true; btn.textContent="削除中…";
+  try{ await postDoc(); closeEditor(); render(); toast("削除しました"); }
+  catch(e){ state.holdings=snapshot; state.doc.holdings=snapshot; render(); toast("削除に失敗: "+e.message,true); }
+  finally{ btn.disabled=false; deleteArmed=false; }
+}
+
+async function boot(){
+  try{
+    const bust="?t="+Date.now();
+    const hRes=await fetch("data/holdings.json"+bust);
+    if(!hRes.ok) throw new Error("data/holdings.json が見つかりません。data/holdings.example.json をコピーして作成してください。");
+    const hj=await hRes.json();
+    let pj={prices:{}};   // 履歴が無い fresh clone でも動くよう、無ければ空で開始
+    try{ const pRes=await fetch("data/prices/history.json"+bust); if(pRes.ok) pj=await pRes.json(); }catch(e){}
+    state.doc=hj; state.holdings=hj.holdings; state.baseDate=hj.meta?.baseDate||null;
+    state.prices=pj.prices||{}; state.dates=Object.keys(state.prices).sort();
+    const latest=state.dates.length?state.dates[state.dates.length-1]:(state.baseDate||new Date().toISOString().slice(0,10));
+    state.asof=latest;
+    const dp=document.getElementById("asof");
+    dp.value=latest; if(state.dates.length){ dp.min=state.dates[0]; dp.max=latest; }
+    dp.addEventListener("change",e=>{ state.asof=e.target.value; render(); });
+    document.querySelectorAll("#period button").forEach(b=>b.addEventListener("click",()=>setPeriod(Number(b.dataset.p))));
+    window.addEventListener("resize",()=>render());
+    // 編集UIの結線
+    document.getElementById("addBtn").addEventListener("click",()=>openEditor(null));
+    document.getElementById("cancelBtn").addEventListener("click",closeEditor);
+    document.getElementById("saveBtn").addEventListener("click",onSave);
+    document.getElementById("deleteBtn").addEventListener("click",onDelete);
+    document.getElementById("f_mode").addEventListener("change",updateModeFields);
+    document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeEditor(); });
+    render();
+  }catch(e){
+    document.getElementById("map").innerHTML=
+      `<div class="msg">データを読み込めませんでした。<br><small>${e.message}</small></div>`;
+  }
+}
+boot();
+</script>
+</body>
+</html>
