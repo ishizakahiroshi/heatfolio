@@ -51,3 +51,8 @@ node_modules/
 # === 個人の保有データ（public へ絶対に出さない・サンプルのみ公開） ===
 data/holdings.json
 data/prices/history.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+

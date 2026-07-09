@@ -18,7 +18,7 @@
 
 ローカル運用構成（タスクスケジューラ / ローカルサーバー / Tailscale 配信）の詳細は `CLAUDE.md` の「ローカル運用構成」節を参照。ガイダンス間で矛盾が出たら `CLAUDE.md` を優先する。
 
-<!-- any-ai-cli:approval-rules -->
+<!-- many-ai-cli:approval-rules -->
 <!-- version: 17 -->
 ## many-ai-cli Approval Format
 
@@ -146,4 +146,4 @@
 
 Hub から `[MANY-AI-CLI-ORCHESTRATION-ERROR]` で始まる 1 行が入力された場合、指揮者セッションは子セッションの起動上限・timeout・Hub 側 orchestration 失敗として扱うこと。
 その子に依存する作業は、既存の子へ再分配するか、必要ならユーザーへ判断を求めること。通常の完了サマリーとは混同しないこと。
-<!-- /any-ai-cli:approval-rules -->
+<!-- /many-ai-cli:approval-rules -->

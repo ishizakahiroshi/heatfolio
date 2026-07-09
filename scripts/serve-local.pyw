@@ -14,18 +14,38 @@
 # 手動起動: pythonw.exe scripts\serve-local.pyw
 
 import http.server
+import math
 import socketserver
 import json
 import os
 import tempfile
+import threading
 from functools import partial
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 HOST = "127.0.0.1"
 PORT = 8080
 ROOT = Path(__file__).resolve().parent.parent  # scripts/ の一つ上 = リポルート
 HOLDINGS = ROOT / "data" / "holdings.json"
 MAX_BODY = 1_000_000  # 1MB 上限（保有ファイルは数 KB 程度）
+
+# 静的配信から除外するパス先頭セグメント / ファイル名（tailnet 内の過剰露出を抑える）
+_BLOCKED_SEGMENTS = frozenset({
+    ".git",
+    ".env",
+    ".claude",
+    ".codex-tmp",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    "node_modules",
+})
+_WRITE_LOCK = threading.Lock()
+
+
+def _is_number(v):
+    return (not isinstance(v, bool)) and isinstance(v, (int, float)) and math.isfinite(v)
 
 
 def validate_holdings(obj):
@@ -42,15 +62,43 @@ def validate_holdings(obj):
         if not isinstance(name, str) or not name.strip():
             return f"holdings[{i}].name is required"
         bv = h.get("baseValue")
-        if isinstance(bv, bool) or not isinstance(bv, (int, float)):
-            return f"holdings[{i}].baseValue must be a number"
+        if not _is_number(bv):
+            return f"holdings[{i}].baseValue must be a finite number"
         mode = h.get("mode", "market")
         if mode not in ("market", "proxy", "manual"):
             return f"holdings[{i}].mode must be market/proxy/manual"
         cur = h.get("currency", "JPY")
         if cur not in ("JPY", "USD"):
             return f"holdings[{i}].currency must be JPY/USD"
+        if mode in ("market", "proxy"):
+            sym = h.get("symbol")
+            if not isinstance(sym, str) or not sym.strip():
+                return f"holdings[{i}].symbol is required for {mode}"
+        if mode == "market":
+            q = h.get("quantity")
+            if not _is_number(q):
+                return f"holdings[{i}].quantity must be a finite number for market"
+        else:
+            q = h.get("quantity", None)
+            if q is not None and not _is_number(q):
+                return f"holdings[{i}].quantity must be a finite number or null"
     return None
+
+
+def _path_is_blocked(raw_path: str) -> bool:
+    """GET/HEAD 対象パスが機微・不要ディレクトリかを判定する。"""
+    path = unquote(urlparse(raw_path).path)
+    parts = [p for p in path.split("/") if p and p != "."]
+    for p in parts:
+        if p in _BLOCKED_SEGMENTS:
+            return True
+        if p.startswith(".env"):
+            return True
+        if p.endswith(".local.md") or p.endswith(".local.json"):
+            return True
+        if p == "AGENTS.local.md" or p == "CLAUDE.local.md":
+            return True
+    return False
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -64,6 +112,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):
+        if _path_is_blocked(self.path):
+            self.send_error(404, "Not Found")
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if _path_is_blocked(self.path):
+            self.send_error(404, "Not Found")
+            return
+        super().do_HEAD()
 
     def do_POST(self):
         if self.path.split("?")[0] != "/api/holdings":
@@ -88,14 +148,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         try:
             data = json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
-            fd, tmp = tempfile.mkstemp(dir=str(HOLDINGS.parent), prefix=".holdings-", suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(data)
-                os.replace(tmp, str(HOLDINGS))  # 原子置換（Windows でも既存を上書き可）
-            finally:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+            with _WRITE_LOCK:
+                fd, tmp = tempfile.mkstemp(
+                    dir=str(HOLDINGS.parent), prefix=".holdings-", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(data)
+                    os.replace(tmp, str(HOLDINGS))  # 原子置換（Windows でも既存を上書き可）
+                finally:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
         except Exception as e:
             self._send_json(500, {"ok": False, "error": f"write failed: {e}"})
             return

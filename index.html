@@ -182,45 +182,66 @@ const pctStr = p => p==null ? "—" : `${p>=0?"+":""}${p.toFixed(2)}%`;
 
 // ---------- 価格参照 ----------
 function priceAt(sym, date){
+  if(sym==null||sym===""||date==null) return null;
   const ds = state.dates;
   for(let i=ds.length-1;i>=0;i--){
-    if(ds[i]<=date){ const v=state.prices[ds[i]]?.[sym]; if(v!=null) return v; }
+    if(ds[i]<=date){ const v=state.prices[ds[i]]?.[sym]; if(v!=null&&isFinite(v)) return v; }
   }
   return null;
 }
 function anchorPrice(sym){
   const at = priceAt(sym, state.baseDate);
   if(at!=null) return at;
-  for(const d of state.dates){ const v=state.prices[d]?.[sym]; if(v!=null) return v; }
+  for(const d of state.dates){ const v=state.prices[d]?.[sym]; if(v!=null&&isFinite(v)) return v; }
   return null;
 }
 function fxAt(date){ return priceAt("JPY=X", date); }   // その日のUSD/JPY始値（円/ドル）
+// YYYY-MM-DD から days 日（負も可）ずらした日付文字列。TZ に依存しない。
+function addDaysYMD(ymd, days){
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if(!m) return null;
+  const dt=new Date(Date.UTC(+m[1], +m[2]-1, +m[3]));
+  dt.setUTCDate(dt.getUTCDate()+days);
+  return dt.toISOString().slice(0,10);
+}
 function valueAt(h, date){
-  if(h.mode==="manual") return h.baseValue;
+  const fallback = (typeof h.baseValue==="number"&&isFinite(h.baseValue)) ? h.baseValue : 0;
+  if(h.mode==="manual") return fallback;
   const p = priceAt(h.symbol, date);
-  if(p==null) return h.baseValue;                 // 価格が未取得ならbaseValueで表示
+  if(p==null) return fallback;                 // 価格が未取得ならbaseValueで表示
   if(h.mode==="market"){
+    const q = h.quantity;
+    if(typeof q!=="number"||!isFinite(q)) return fallback; // 数量未設定は baseValue
     if(h.currency==="USD"){
       const fx = fxAt(date);
-      if(fx==null) return h.baseValue;            // USD/JPY未取得なら登録額で表示
-      return h.quantity * p * fx;                 // ドル建て: 数量 × ドル株価 × その日のUSD/JPY始値
+      if(fx==null) return fallback;            // USD/JPY未取得なら登録額で表示
+      const v = q * p * fx;                    // ドル建て: 数量 × ドル株価 × その日のUSD/JPY始値
+      return isFinite(v) ? v : fallback;
     }
-    return h.quantity * p;
+    const v = q * p;
+    return isFinite(v) ? v : fallback;
   }
   const a = anchorPrice(h.symbol);
-  if(a==null || a===0) return h.baseValue;
-  return h.baseValue * p / a;                      // proxy: baseDate比でドリフト
+  if(a==null || a===0) return fallback;
+  const v = fallback * p / a;                  // proxy: baseDate比でドリフト
+  return isFinite(v) ? v : fallback;
 }
 // 基準日 asof に対して period 日前の参照日を探して騰落率を返す
 function pctFor(h, asof, period){
   if(h.mode==="manual") return null;              // 非追跡は「—」
-  const cutoff = new Date(asof); cutoff.setDate(cutoff.getDate()-period);
-  const cut = cutoff.toISOString().slice(0,10);
+  // 価格（USD なら FX も）が両日揃わないときは baseValue フォールバックで偽 0% になるのを防ぐ
+  if(priceAt(h.symbol, asof)==null) return null;
+  if(h.mode==="market" && h.currency==="USD" && fxAt(asof)==null) return null;
+  if(h.mode==="market" && (typeof h.quantity!=="number"||!isFinite(h.quantity))) return null;
+  const cut = addDaysYMD(asof, -period);
+  if(!cut) return null;
   let refDate=null;
   for(let i=state.dates.length-1;i>=0;i--){ if(state.dates[i]<=cut){ refDate=state.dates[i]; break; } }
   if(!refDate) return null;
+  if(priceAt(h.symbol, refDate)==null) return null;
+  if(h.mode==="market" && h.currency==="USD" && fxAt(refDate)==null) return null;
   const now=valueAt(h,asof), ref=valueAt(h,refDate);
-  if(ref==null||ref===0) return null;
+  if(ref==null||ref===0||!isFinite(now)||!isFinite(ref)) return null;
   return (now/ref-1)*100;
 }
 
@@ -253,22 +274,45 @@ function render(){
 
   const enriched=state.holdings.map((h,idx)=>({
     ...h, _idx: idx, value: valueAt(h, asof), pct: pctFor(h, asof, state.period)
-  })).filter(h=>h.value>0);
+  }));
 
-  const total=enriched.reduce((s,h)=>s+h.value,0);
+  // 合計は正の評価額のみ。0以下もマップに残してクリック編集できるようにする
+  const total=enriched.reduce((s,h)=>s+(h.value>0&&isFinite(h.value)?h.value:0),0);
   document.getElementById("total").textContent="¥"+yen(total);
+  const zeroN=enriched.filter(h=>!(h.value>0&&isFinite(h.value))).length;
+  const layoutTotal=total>0?total:1;
+  const minArea=layoutTotal*0.002; // 極小タイル（編集経路確保。合計比はほぼ歪まない）
 
-  // 期間損益（追跡できるものだけ）
+  // 期間損益（追跡できるものだけ・正の評価額）
   let dNow=0,dRef=0;
-  enriched.forEach(h=>{ if(h.pct!=null){ dNow+=h.value; dRef+=h.value/(1+h.pct/100); } });
+  enriched.forEach(h=>{
+    if(h.pct!=null&&h.value>0&&isFinite(h.value)){ dNow+=h.value; dRef+=h.value/(1+h.pct/100); }
+  });
   const totPct = dRef>0 ? (dNow/dRef-1)*100 : null;
   const st=document.getElementById("subtotal");
   const label=({1:"前日比",7:"1週間",30:"1ヶ月",365:"1年"})[state.period];
-  st.innerHTML = totPct==null ? `<span style="color:var(--dim)">${label}の比較データがまだありません（履歴が溜まると表示）</span>`
-    : `<span class="${totPct>=0?'gain':'loss'}">${pctStr(totPct)}</span> <span style="color:var(--dim)">${label}（価格取得分のみ）</span>`;
+  st.textContent="";
+  if(totPct==null){
+    const span=document.createElement("span");
+    span.style.color="var(--dim)";
+    span.textContent=label+"の比較データがまだありません（履歴が溜まると表示）";
+    st.appendChild(span);
+  }else{
+    const span=document.createElement("span");
+    span.className=totPct>=0?"gain":"loss";
+    span.textContent=pctStr(totPct);
+    const dim=document.createElement("span");
+    dim.style.color="var(--dim)";
+    dim.textContent=" "+label+"（価格取得分のみ）";
+    st.appendChild(span); st.appendChild(dim);
+  }
   document.getElementById("legendLabel").textContent="色 = "+label;
 
-  const tiles=squarify(enriched.map(h=>({...h,value:h.value})),0,0,W,H);
+  const forMap=enriched.map(h=>({
+    ...h,
+    value:(h.value>0&&isFinite(h.value))?h.value:minArea
+  }));
+  const tiles=squarify(forMap,0,0,W,H);
   const svgns="http://www.w3.org/2000/svg";
   const svg=document.createElementNS(svgns,"svg");
   svg.setAttribute("width",W); svg.setAttribute("height",H); svg.style.display="block";
@@ -319,12 +363,14 @@ function render(){
     }
     svg.appendChild(g);
   });
-  el.innerHTML=""; el.appendChild(svg);
+  el.replaceChildren(svg);
 
   const latest=state.dates.length?state.dates[state.dates.length-1]:state.baseDate;
-  document.getElementById("footnote").innerHTML =
-    `基準日 ${asof}（最新データ: ${latest||"未取得"}）｜面積=評価額、色=${label}。`+
+  const foot=document.getElementById("footnote");
+  let footText=`基準日 ${asof}（最新データ: ${latest||"未取得"}）｜面積=評価額、色=${label}。`+
     `投信/DC/非上場は指数近似または固定値です。価格が未取得の項目は登録時の評価額で表示しています。`;
+  if(zeroN>0) footText+=`｜評価額0以下の銘柄が ${zeroN} 件あります（極小タイルで表示・クリックで編集可）。`;
+  foot.textContent=footText;
 }
 
 // ---------- 初期化 ----------
@@ -391,11 +437,23 @@ async function onSave(){
   const baseValue=Number(baseRaw);
   if(baseRaw===""||!isFinite(baseValue)){ toast("評価額を数値で入力してください",true); return; }
   if(mode!=="manual"&&!symbolRaw){ toast("シンボルを入力してください（manual 以外は必要）",true); return; }
+  let quantity=null;
+  if(mode==="market"){
+    if(qtyRaw===""){ toast("数量を入力してください（market は必須）",true); return; }
+    quantity=Number(qtyRaw);
+    if(!isFinite(quantity)){ toast("数量を数値で入力してください",true); return; }
+  }else if(qtyRaw!==""){
+    quantity=Number(qtyRaw);
+    if(!isFinite(quantity)){ toast("数量を数値で入力してください",true); return; }
+  }else if(mode==="manual"){
+    const prev=editIndex==null?null:state.holdings[editIndex];
+    quantity=prev&&typeof prev.quantity==="number"&&isFinite(prev.quantity)?prev.quantity:null;
+  }
   const currencyVal=document.getElementById("f_currency").value;
   const base=editIndex==null?{}:{...state.holdings[editIndex]};  // 既存の未知フィールド(proxyNote等)を保持
   base.name=name; base.type=type; base.mode=mode;
   base.symbol=mode==="manual"?null:symbolRaw;
-  base.quantity=(qtyRaw===""?(mode==="manual"?(base.quantity??null):null):Number(qtyRaw));
+  base.quantity=quantity;
   if(mode==="market" && currencyVal==="USD") base.currency="USD"; else delete base.currency;  // 円は既定(フィールド省略)
   base.baseValue=baseValue;
   const snapshot=state.holdings.slice();
@@ -444,8 +502,16 @@ async function boot(){
     document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeEditor(); });
     render();
   }catch(e){
-    document.getElementById("map").innerHTML=
-      `<div class="msg">データを読み込めませんでした。<br><small>${e.message}</small></div>`;
+    const map=document.getElementById("map");
+    map.replaceChildren();
+    const box=document.createElement("div");
+    box.className="msg";
+    box.append("データを読み込めませんでした。");
+    box.appendChild(document.createElement("br"));
+    const small=document.createElement("small");
+    small.textContent=e&&e.message?String(e.message):String(e);
+    box.appendChild(small);
+    map.appendChild(box);
   }
 }
 boot();

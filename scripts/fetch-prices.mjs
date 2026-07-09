@@ -6,9 +6,10 @@
 //   価格取得は fetchClose() に集約してある。Yahoo が塞がれたら、この関数だけを
 //   Alpha Vantage 等に差し替えれば復旧できる（他は触らなくてよい）。
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOLDINGS = join(ROOT, "data", "holdings.json");
@@ -37,7 +38,10 @@ async function fetchQuote(symbol, field = "close") {
       const series = r?.indicators?.quote?.[0]?.[field] ?? [];
       // 直近の非nullな値を採用
       for (let i = series.length - 1; i >= 0; i--) {
-        if (series[i] != null) return Number(series[i]);
+        if (series[i] != null) {
+          const n = Number(series[i]);
+          if (Number.isFinite(n)) return n;
+        }
       }
       throw new Error(`no ${field} data`);
     } catch (e) {
@@ -53,8 +57,35 @@ async function fetchClose(symbol) {
   return fetchQuote(symbol, "close");
 }
 
+/** history.json を一時ファイル経由で原子置換する（途中 kill で壊さない） */
+async function writeHistoryAtomic(history) {
+  const dir = dirname(HISTORY);
+  const tmp = join(dir, `.history-${randomBytes(8).toString("hex")}.tmp`);
+  const body = JSON.stringify(history, null, 2) + "\n";
+  try {
+    await writeFile(tmp, body, "utf8");
+    await rename(tmp, HISTORY);
+  } catch (e) {
+    try {
+      await unlink(tmp);
+    } catch {
+      /* ignore cleanup errors */
+    }
+    throw e;
+  }
+}
+
 async function main() {
-  const holdings = JSON.parse(await readFile(HOLDINGS, "utf8"));
+  let holdings;
+  try {
+    holdings = JSON.parse(await readFile(HOLDINGS, "utf8"));
+  } catch (e) {
+    throw new Error(`failed to read holdings.json: ${e.message}`);
+  }
+  if (!Array.isArray(holdings?.holdings)) {
+    throw new Error("holdings.json: top-level.holdings must be an array");
+  }
+
   // 履歴が無い fresh clone でも動くよう、無ければ空で開始する
   let history;
   try {
@@ -62,13 +93,13 @@ async function main() {
   } catch {
     history = { prices: {} };
   }
-  if (!history.prices) history.prices = {};
+  if (!history.prices || typeof history.prices !== "object") history.prices = {};
 
   // 取得対象の symbol を重複なく集める（manual や symbol なしは除外）
   const symbols = [
     ...new Set(
       holdings.holdings
-        .filter((h) => h.mode !== "manual" && h.symbol)
+        .filter((h) => h && h.mode !== "manual" && typeof h.symbol === "string" && h.symbol)
         .map((h) => h.symbol)
     ),
   ];
@@ -90,7 +121,7 @@ async function main() {
 
   // USD 建て保有（market・symbol あり）があれば、USD/JPY の「始値」も取得して円換算に使う
   const needsFx = holdings.holdings.some(
-    (h) => h.currency === "USD" && h.mode !== "manual" && h.symbol
+    (h) => h && h.currency === "USD" && h.mode !== "manual" && h.symbol
   );
   if (needsFx) {
     const fx = await fetchQuote(FX_SYMBOL, "open");
@@ -108,7 +139,7 @@ async function main() {
   }
 
   history.prices[date] = row;
-  await writeFile(HISTORY, JSON.stringify(history, null, 2) + "\n", "utf8");
+  await writeHistoryAtomic(history);
   console.log(`Wrote ${Object.keys(row).length} prices to history for ${date}.`);
 }
 
