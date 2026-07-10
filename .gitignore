@@ -52,6 +52,9 @@ node_modules/
 data/holdings.json
 data/prices/history.json
 
+# === ローカル作業メモ（plan / bugfix / report / manual release ノート・public へ出さない） ===
+docs/local/
+
 # === Python ===
 __pycache__/
 *.py[cod]
