@@ -44,6 +44,18 @@ See the Japanese [README.md](README.md) for:
 - Windows Task Scheduler + Tailscale operational setup
 - How to bootstrap on a fresh machine
 
+## Viewing from other devices
+
+Run exactly one heatfolio server on this PC, then open its URL from a browser on your other devices. With Tailscale installed, your phone or another PC can reach `https://<this-machine>.<tailnet>.ts.net:8443/`.
+
+Do not run independent heatfolio installations on several devices and manually synchronize `data/holdings.json`. heatfolio deliberately does not resolve write conflicts, so a later write can overwrite an earlier one. Use JSON or CSV export when you need to carry data elsewhere.
+
+## Exporting and importing data
+
+- **JSON export**: Use the `JSON` button at the top of the page to download `holdings-YYYY-MM-DD.json`. It is equivalent to `data/holdings.json` and is suitable for backups, migration to another PC, or use in another tool.
+- **CSV export**: The `CSV` button downloads holdings, quantities, valuations, and returns for analysis in Excel or Google Sheets.
+- **CSV import**: This is intentionally not a heatfolio feature because every brokerage uses a different CSV format. Instead, `scripts/import-samples/` contains examples that convert broker CSV files into heatfolio JSON. Write one small Node.js script for your own broker.
+
 ## Related article
 
 "[Designing a local-only asset dashboard: a treemap-based tool that never touches brokerage APIs](https://qiita.com/ishizakahiroshi/items/b5da260733e416085421)" (Japanese, published on Qiita)

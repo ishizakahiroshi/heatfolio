@@ -90,6 +90,8 @@
       <button data-p="365">1Y</button>
     </div>
     <button class="addbtn" id="addBtn">＋ 銘柄を追加</button>
+    <button class="addbtn" id="exportJsonBtn">JSON</button>
+    <button class="addbtn" id="exportCsvBtn">CSV</button>
     <div class="datepick">
       <label for="asof">基準日</label>
       <input type="date" id="asof" />
@@ -465,6 +467,42 @@ function setPeriod(p){ state.period=p;
   document.querySelectorAll("#period button").forEach(b=>b.classList.toggle("on",Number(b.dataset.p)===p));
   render();
 }
+function triggerDownload(blob, filename){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download=filename; a.style.display="none";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function downloadJson(){
+  const json=JSON.stringify(state.doc,null,2)+"\n";
+  const blob=new Blob([json],{type:"application/json;charset=utf-8"});
+  const today=new Date().toISOString().slice(0,10);
+  triggerDownload(blob,`holdings-${today}.json`);
+}
+function csvEscape(value){
+  if(value==null) return "";
+  const text=String(value);
+  return /[,"\r\n]/.test(text) ? `"${text.replace(/"/g,'""')}"` : text;
+}
+function toCsv(){
+  const cols=["name","code","type","mode","symbol","currency","quantity","unit","baseValue","valueYen","pctPrev"];
+  const rows=state.holdings.map(h=>{
+    const valueYen=valueAt(h,state.asof);
+    const pctPrev=pctFor(h,state.asof,1);
+    const record={...h,
+      valueYen:isFinite(valueYen)?Math.round(valueYen):"",
+      pctPrev:pctPrev==null?"":pctPrev.toFixed(2)
+    };
+    return cols.map(col=>csvEscape(record[col])).join(",");
+  });
+  return "\ufeff"+[cols.join(","),...rows].join("\r\n")+"\r\n";
+}
+function downloadCsv(){
+  const blob=new Blob([toCsv()],{type:"text/csv;charset=utf-8"});
+  const today=new Date().toISOString().slice(0,10);
+  triggerDownload(blob,`heatfolio-${today}.csv`);
+}
 // ---------- 編集 ----------
 let editIndex=null;      // 編集中の holdings index。新規追加は null
 let deleteArmed=false;   // 削除の二段階確認フラグ
@@ -611,6 +649,8 @@ async function boot(){
     window.addEventListener("resize",()=>render());
     // 編集UIの結線
     document.getElementById("addBtn").addEventListener("click",()=>openEditor(null));
+    document.getElementById("exportJsonBtn").addEventListener("click",downloadJson);
+    document.getElementById("exportCsvBtn").addEventListener("click",downloadCsv);
     document.getElementById("cancelBtn").addEventListener("click",closeEditor);
     document.getElementById("saveBtn").addEventListener("click",onSave);
     document.getElementById("deleteBtn").addEventListener("click",onDelete);
