@@ -116,6 +116,11 @@
       <input id="f_name" type="text" placeholder="例: NTT" />
     </div>
     <div class="field">
+      <label for="f_code">コード（表示用・任意）</label>
+      <input id="f_code" type="text" placeholder="例: 9432 / AAPL / SPCX" />
+      <div class="hint">tile に「銘柄名 (コード)」で併記。空なら名前だけ</div>
+    </div>
+    <div class="field">
       <label for="f_type">分類（メモ・任意）</label>
       <input id="f_type" type="text" placeholder="国内株 / 投信 / 確定拠出年金 …" />
     </div>
@@ -143,10 +148,20 @@
       <label for="f_qty">数量</label>
       <input id="f_qty" type="number" step="any" placeholder="例: 100" />
     </div>
+    <div class="field" id="fld_unit">
+      <label for="f_unit">単位（任意）</label>
+      <input id="f_unit" type="text" placeholder="例: 株 / 口" />
+      <div class="hint">未指定なら分類から自動（株→株、投信→口）。tile で「100 株」のように表示</div>
+    </div>
     <div class="field">
       <label for="f_base">評価額（円）</label>
       <input id="f_base" type="number" step="any" placeholder="例: 14700" />
       <div class="hint" id="baseHint"></div>
+    </div>
+    <div class="field" id="fld_ext">
+      <label>外部で確認</label>
+      <div id="ext_links" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+      <div class="hint" id="ext_links_hint" style="display:none;">シンボル未設定のため自動生成できません。手動指定は holdings.json の links フィールドで</div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-primary" id="saveBtn">保存</button>
@@ -179,6 +194,41 @@ function colorFor(pct, period){
 }
 const yen = n => Math.round(n).toLocaleString("ja-JP");
 const pctStr = p => p==null ? "—" : `${p>=0?"+":""}${p.toFixed(2)}%`;
+
+// ---------- 表示ヘルパ ----------
+function unitFor(h){
+  if(h.unit) return h.unit;
+  const t=h.type||"";
+  if(t.includes("投信")||t.includes("ファンド")) return "口";
+  if(t.includes("株")) return "株";
+  return "";
+}
+function qtyDisplay(h){
+  if(h.mode==="proxy") return null;               // proxy は数量非表示（指数近似のため意味が薄い）
+  const q=h.quantity;
+  if(typeof q!=="number"||!isFinite(q)||q<=0) return null;
+  const u=unitFor(h);
+  return q.toLocaleString("ja-JP")+(u?" "+u:"");
+}
+// 外部リンクを symbol から自動判定（holdings.json の links フィールドで上書き可）
+function externalLinks(h){
+  const l=h.links||{}, s=h.symbol, out={};
+  if(l.yahoo) out.yahoo=l.yahoo;
+  else if(s){
+    // 日本の指数 (^N225, ^TPX) と .T / =X は Yahoo JP、それ以外は Yahoo US
+    const isJpIndex=(s==="^N225"||s==="^TPX"||s==="^N300");
+    if(s.endsWith(".T")||s.includes("=X")||isJpIndex) out.yahoo=`https://finance.yahoo.co.jp/quote/${encodeURIComponent(s)}`;
+    else out.yahoo=`https://finance.yahoo.com/quote/${encodeURIComponent(s)}`;
+  }
+  if(l.tradingview) out.tradingview=l.tradingview;
+  else if(s){
+    if(s.endsWith(".T")) out.tradingview=`https://www.tradingview.com/symbols/TSE-${encodeURIComponent(s.slice(0,-2))}/`;
+    else if(s==="^GSPC") out.tradingview="https://www.tradingview.com/symbols/SPX/";
+    else if(s==="^N225") out.tradingview="https://www.tradingview.com/symbols/NIKKEI-NKY/";
+    else if(!s.includes("=X")&&!s.startsWith("^")) out.tradingview=`https://www.tradingview.com/symbols/${encodeURIComponent(s)}/`;
+  }
+  return out;
+}
 
 // ---------- 価格参照 ----------
 function priceAt(sym, date){
@@ -341,10 +391,39 @@ function render(){
       const box=document.createElementNS(XHTML,"div");
       box.setAttribute("style",`box-sizing:border-box;width:100%;height:100%;padding:6px 8px;`+
         `display:flex;flex-direction:column;overflow:hidden;color:#fff;font-family:inherit;`+
-        `font-size:${fs}px;line-height:1.15;`);
+        `font-size:${fs}px;line-height:1.15;position:relative;`);
+      // 右上に外部リンクバッジ（symbol がある tile だけ、tile 幅 100px 以上で表示）
+      const _urls=externalLinks(t);
+      const _badgesShown=(t.w>=100 && (_urls.yahoo||_urls.tradingview));
+      if(_badgesShown){
+        const badges=document.createElementNS(XHTML,"div");
+        badges.setAttribute("style","position:absolute;top:4px;right:6px;display:flex;gap:3px;pointer-events:none;z-index:2;");
+        const specs=[["yahoo","Y","Yahoo Finance","rgba(103,58,183,.78)"],["tradingview","TV","TradingView","rgba(41,98,255,.78)"]];
+        for(const [k,label,fullLabel,bg] of specs){
+          if(!_urls[k]) continue;
+          const a=document.createElementNS(XHTML,"a");
+          a.href=_urls[k]; a.target="_blank"; a.rel="noopener noreferrer";
+          a.textContent=label; a.title=fullLabel+" で開く";
+          a.setAttribute("style",`display:inline-flex;align-items:center;justify-content:center;`+
+            `background:${bg};color:#fff;text-decoration:none;font-size:10px;font-weight:700;`+
+            `padding:2px 5px;border-radius:4px;min-width:14px;line-height:1;pointer-events:auto;`+
+            `letter-spacing:.02em;`);
+          a.addEventListener("click",e=>e.stopPropagation()); // tile 側の edit を開かない
+          badges.appendChild(a);
+        }
+        box.appendChild(badges);
+      }
       const nameEl=document.createElementNS(XHTML,"div");
+      const _nameStyle="font-weight:600;overflow-wrap:anywhere;word-break:break-word;overflow:hidden;"+
+        (_badgesShown?"padding-right:44px;":"");
+      nameEl.setAttribute("style",_nameStyle);
       nameEl.textContent=t.name;
-      nameEl.setAttribute("style","font-weight:600;overflow-wrap:anywhere;word-break:break-word;overflow:hidden;");
+      if(big && t.code && String(t.code).trim()!==""){
+        const codeSpan=document.createElementNS(XHTML,"span");
+        codeSpan.textContent=" ("+t.code+")";
+        codeSpan.setAttribute("style",`color:rgba(255,255,255,.55);font-weight:400;font-size:${Math.max(9,fs-3)}px;`);
+        nameEl.appendChild(codeSpan);
+      }
       box.appendChild(nameEl);
       if(big){
         const valEl=document.createElementNS(XHTML,"div");
@@ -352,6 +431,14 @@ function render(){
         valEl.setAttribute("style",`margin-top:2px;font-size:${Math.max(10,fs-3)}px;`+
           `color:rgba(255,255,255,.82);font-variant-numeric:tabular-nums;`);
         box.appendChild(valEl);
+        const qd=qtyDisplay(t);
+        if(qd && t.h>78){
+          const qtyEl=document.createElementNS(XHTML,"div");
+          qtyEl.textContent=qd;
+          qtyEl.setAttribute("style",`margin-top:1px;font-size:${Math.max(9,fs-4)}px;`+
+            `color:rgba(255,255,255,.62);font-variant-numeric:tabular-nums;`);
+          box.appendChild(qtyEl);
+        }
       }
       const pctEl=document.createElementNS(XHTML,"div");
       pctEl.textContent=pctStr(t.pct);
@@ -390,7 +477,8 @@ function toast(msg,isErr){
 function updateModeFields(){
   const mode=document.getElementById("f_mode").value;
   document.getElementById("fld_symbol").classList.toggle("hidden",mode==="manual");
-  document.getElementById("fld_qty").classList.toggle("hidden",mode==="manual");
+  // 数量は manual でも「1株」等の意味を持つケースがある（非上場の SpaceX 1株など）ので常に表示
+  document.getElementById("fld_qty").classList.remove("hidden");
   document.getElementById("fld_currency").classList.toggle("hidden",mode!=="market"); // 円換算は market のみ
   const hints={
     market:"上場株。数量 × 価格で自動計算。価格が未取得の間はこの評価額で表示",
@@ -399,20 +487,44 @@ function updateModeFields(){
   };
   document.getElementById("baseHint").textContent=hints[mode]||"";
 }
+function refreshExtLinks(){
+  // 現在のフォーム値で外部リンクボタンを組み立て直す
+  const wrap=document.getElementById("ext_links");
+  const hint=document.getElementById("ext_links_hint");
+  wrap.replaceChildren();
+  const symbol=document.getElementById("f_symbol").value.trim();
+  // 既存の links (holdings.json の手動上書き) は保存済みデータからのみ反映
+  const prev=editIndex==null?null:state.holdings[editIndex];
+  const links=(prev&&prev.links)||{};
+  const urls=externalLinks({symbol,links});
+  const entries=[["yahoo","Yahoo Finance"],["tradingview","TradingView"]];
+  let shown=0;
+  for(const [k,label] of entries){
+    if(!urls[k]) continue;
+    const a=document.createElement("a");
+    a.href=urls[k]; a.target="_blank"; a.rel="noopener noreferrer";
+    a.textContent=label; a.className="btn btn-ghost"; a.style.textDecoration="none";
+    wrap.appendChild(a); shown++;
+  }
+  hint.style.display=shown===0?"block":"none";
+}
 function openEditor(idx){
   editIndex=(idx==null?null:idx); deleteArmed=false;
   const h=idx==null?{}:state.holdings[idx];
   document.getElementById("modalTitle").textContent=idx==null?"銘柄を追加":"銘柄を編集";
   document.getElementById("f_name").value=h.name||"";
+  document.getElementById("f_code").value=h.code||"";
   document.getElementById("f_type").value=h.type||"";
   document.getElementById("f_mode").value=h.mode||"market";
   document.getElementById("f_symbol").value=h.symbol||"";
   document.getElementById("f_currency").value=(h.currency||"JPY");
   document.getElementById("f_qty").value=(h.quantity==null?"":h.quantity);
+  document.getElementById("f_unit").value=h.unit||"";
   document.getElementById("f_base").value=(h.baseValue==null?"":h.baseValue);
   document.getElementById("deleteRow").style.display=idx==null?"none":"flex";
   document.getElementById("deleteBtn").textContent="この銘柄を削除";
   updateModeFields();
+  refreshExtLinks();
   document.getElementById("overlay").classList.add("open");
   document.getElementById("f_name").focus();
 }
@@ -428,10 +540,12 @@ async function postDoc(){
 }
 async function onSave(){
   const name=document.getElementById("f_name").value.trim();
+  const code=document.getElementById("f_code").value.trim();
   const mode=document.getElementById("f_mode").value;
   const type=document.getElementById("f_type").value.trim();
   const symbolRaw=document.getElementById("f_symbol").value.trim();
   const qtyRaw=document.getElementById("f_qty").value.trim();
+  const unitRaw=document.getElementById("f_unit").value.trim();
   const baseRaw=document.getElementById("f_base").value.trim();
   if(!name){ toast("銘柄名を入力してください",true); return; }
   const baseValue=Number(baseRaw);
@@ -450,10 +564,12 @@ async function onSave(){
     quantity=prev&&typeof prev.quantity==="number"&&isFinite(prev.quantity)?prev.quantity:null;
   }
   const currencyVal=document.getElementById("f_currency").value;
-  const base=editIndex==null?{}:{...state.holdings[editIndex]};  // 既存の未知フィールド(proxyNote等)を保持
+  const base=editIndex==null?{}:{...state.holdings[editIndex]};  // 既存の未知フィールド(proxyNote/links等)を保持
   base.name=name; base.type=type; base.mode=mode;
+  if(code) base.code=code; else delete base.code;
   base.symbol=mode==="manual"?null:symbolRaw;
   base.quantity=quantity;
+  if(unitRaw) base.unit=unitRaw; else delete base.unit;
   if(mode==="market" && currencyVal==="USD") base.currency="USD"; else delete base.currency;  // 円は既定(フィールド省略)
   base.baseValue=baseValue;
   const snapshot=state.holdings.slice();
@@ -499,6 +615,7 @@ async function boot(){
     document.getElementById("saveBtn").addEventListener("click",onSave);
     document.getElementById("deleteBtn").addEventListener("click",onDelete);
     document.getElementById("f_mode").addEventListener("change",updateModeFields);
+    document.getElementById("f_symbol").addEventListener("input",refreshExtLinks);
     document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeEditor(); });
     render();
   }catch(e){

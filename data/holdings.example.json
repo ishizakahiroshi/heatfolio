@@ -7,24 +7,33 @@
       "proxy": "評価額 = baseValue × 価格(symbol) / baseDate時点の価格。投信/DC/指数近似向け。",
       "manual": "評価額は baseValue のまま固定（自動更新しない）。非上場など価格の取れないもの向け。"
     },
+    "fields": {
+      "code": "tile 表示用のティッカー/コード。空なら名前だけ表示。Yahoo 検索の目印にも便利。",
+      "unit": "数量の単位。省略時は type から自動判定（国内/米国株→株、投信→口）。",
+      "links": "任意の外部リンク上書き。{ yahoo: URL, tradingview: URL } を書くと自動判定より優先される。"
+    },
     "baseDate": "2026-01-01"
   },
   "holdings": [
     {
       "name": "国内株の例",
+      "code": "7203",
       "type": "国内株",
       "mode": "market",
       "symbol": "7203.T",
       "quantity": 100,
+      "unit": "株",
       "baseValue": 300000
     },
     {
       "name": "米国株の例",
+      "code": "AAPL",
       "type": "米国株",
       "mode": "market",
       "symbol": "AAPL",
       "currency": "USD",
       "quantity": 10,
+      "unit": "株",
       "baseValue": 300000,
       "note": "currency=USD にすると その日の USD/JPY 始値(JPY=X)で円換算される"
     },
@@ -33,16 +42,24 @@
       "type": "投信",
       "mode": "proxy",
       "symbol": "2559.T",
+      "quantity": 12345,
+      "unit": "口",
       "baseValue": 500000,
       "proxyNote": "連動指数(ここでは MAXIS全世界株式)の日次変化率で評価額をドリフトさせる近似"
     },
     {
       "name": "非上場・その他の例",
+      "code": "PRIV",
       "type": "非上場",
       "mode": "manual",
       "symbol": null,
+      "quantity": 1,
+      "unit": "株",
       "baseValue": 100000,
-      "manualNote": "価格が取れないものは manual。値を変えたい時は baseValue を手で更新する"
+      "links": {
+        "yahoo": "https://www.bloomberg.com/quote/PRIVATECO:US"
+      },
+      "manualNote": "価格が取れないものは manual。値を変えたい時は baseValue を手で更新する。symbol が無いので外部リンクは links に手動 URL を書くと出せる"
     }
   ]
 }
