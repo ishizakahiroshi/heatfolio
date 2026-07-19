@@ -1,3 +1,4 @@
+# LEGACY: prefer `heatfolio serve` (Node) for new installs.
 # heatfolio ローカル配信サーバー（完全ローカル・tailscale serve のバックエンド）
 #
 # 127.0.0.1:8080 で heatfolio ディレクトリを静的配信し、加えて保有編集用の
@@ -10,8 +11,10 @@
 # pythonw.exe（コンソール無し）で常駐させるため http.server の既定ログは
 # stderr へ書こうとしてクラッシュする。log_message を無効化して回避する。
 #
-# 自動起動: HKCU\...\Run の "heatfolio-server" が pythonw でこれを起動する。
-# 手動起動: pythonw.exe scripts\serve-local.pyw
+# 自動起動は Node 経路（HKCU Run → scripts\run-serve.vbs）が正。
+# この Python サーバーは legacy。手動起動する場合のみ:
+#   pythonw.exe scripts\serve-local.pyw
+
 
 import http.server
 import math

@@ -3,6 +3,14 @@
 このプロジェクトの主な変更点を記録する。形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/)、
 バージョニングは [SemVer](https://semver.org/lang/ja/) に従う。
 
+## [0.2.0] - 2026-07-11
+
+### Added
+- `heatfolio` CLI と `npx heatfolio` 用の package metadata を追加
+- 保有データと価格履歴を `~/.heatfolio` のユーザーデータホームへ分離
+- Node ローカルサーバーを追加し、静的 UI とホームデータを同じ URL で配信
+- 既存のリポジトリ内データを空のホームへ移行する処理と、`heatfolio path` を追加
+
 ## [0.1.0] - 2026-07-07
 
 ### Added

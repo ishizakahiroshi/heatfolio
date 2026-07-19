@@ -9,7 +9,7 @@
 数量だけ一度登録しておけば、価格は日次バッチ（Windows タスクスケジューラ）が公開ソース（Yahoo chart API）から自動取得する。
 面積 = 評価額 / 色 = 騰落率。証券口座の ID/PW は一切扱わず、DB も持たない。
 
-**運用方針: 完全ローカル・非公開。** 保有データ（`data/holdings.json`）は実際の資産額を含むため、
+**運用方針: 完全ローカル・非公開。** 保有データ（既定は `~/.heatfolio/holdings.json`）は実際の資産額を含むため、
 GitHub / GitHub Pages / Cloudflare 等の外部には一切出さない。閲覧はこの PC 上のローカルサーバー経由で行い、
 外部端末（スマホ等）からは Tailscale（tailnet 限定）越しにアクセスする。詳細は下記「ローカル運用構成」節。
 
@@ -27,25 +27,29 @@ GitHub / GitHub Pages / Cloudflare 等の外部には一切出さない。閲覧
 |---|---|
 | フロント | 静的 HTML/CSS/JS（`index.html` 単一ファイル・ビルドなし） |
 | 価格取得 | Node.js ESM（`scripts/fetch-prices.mjs`・Yahoo chart API・`fetchClose()` に集約） |
-| データ保存 | JSON ファイル（`data/holdings.json` 手入力 / `data/prices/history.json` 自動追記・DB なし） |
+| データ保存 | JSON ファイル（既定は `~/.heatfolio/holdings.json` / `~/.heatfolio/prices/history.json`・DB なし） |
 | 価格の自動更新 | Windows タスクスケジューラ `heatfolio-fetch-prices`（平日16:05） |
-| ローカル配信 | Python `http.server`（`scripts/serve-local.pyw`・`127.0.0.1:8080`） |
+| ローカル配信 | Node `http`（`scripts/serve-local.mjs`・`127.0.0.1:8080`）。Python は legacy |
 | 外部アクセス | Tailscale `serve` の `:8443`（tailnet 限定 HTTPS 中継・インターネット非公開） |
 | ホスティング | なし（完全ローカル・非公開） |
 
 ## ディレクトリ構成
 
 - `index.html` — 保有と価格履歴を読み、評価額を計算して treemap を描画する静的ページ
-- `data/holdings.json` — 保有（銘柄・数量・評価方法 `market`/`proxy`/`manual`）を手入力
-- `data/prices/history.json` — 価格履歴（日次バッチが自動追記）
-- `scripts/fetch-prices.mjs` — Yahoo chart API から終値を取得し history に追記
+- `data/holdings.example.json` — 初回シード用の合成サンプル。実データは既定で `~/.heatfolio/` に置く
+- `data/prices/history.example.json` — 初回シード用の空の価格履歴
+- `scripts/heatfolio.mjs` — `serve` / `fetch` / `path` / `open` を提供する Node CLI
+- `scripts/lib/data-home.mjs` — データホーム解決、初回シード、空ホームへの移行
+- `scripts/serve-local.mjs` — パッケージ静的配信とデータホーム API（`127.0.0.1:8080`）
+- `scripts/fetch-prices.mjs` — Yahoo chart API から終値を取得しホームの history に追記
 - `scripts/run-fetch.vbs` — 上記バッチをウィンドウ非表示で起動する launcher（タスクスケジューラ用・ShotTTL の `run-hidden.vbs` に準拠）
-- `scripts/serve-local.pyw` — ローカル配信サーバー＋保有編集の保存API（`POST /api/holdings`）。tailscale serve のバックエンド
+- `scripts/serve-local.pyw` — Python の legacy ローカル配信サーバー。新規経路では使わない
 
 ## 主要コマンド
 
-- 価格取得（履歴に追記）: `node scripts/fetch-prices.mjs`
-- ローカルサーバー手動起動: `pythonw scripts/serve-local.pyw`（通常はログオン時に自動起動）
+- ローカルサーバー手動起動: `heatfolio serve` または `node scripts/heatfolio.mjs serve`
+- 価格取得（履歴に追記）: `heatfolio fetch` または `node scripts/heatfolio.mjs fetch`
+- データホーム表示: `heatfolio path`
 - 外部共有の状態確認: `tailscale serve status`
 - 外部共有の（再）有効化: `tailscale serve --bg --https=8443 8080`
 - 外部共有の停止: `tailscale serve --https=8443 off`
@@ -56,15 +60,13 @@ GitHub / GitHub Pages / Cloudflare 等の外部には一切出さない。閲覧
 閲覧・更新の仕組みは以下の3つで成り立っている。いずれもこの PC 上で完結し、外部へ出ない。
 
 1. 価格の自動更新: タスクスケジューラ `heatfolio-fetch-prices` が平日16:05に `wscript.exe scripts\run-fetch.vbs`
-   （node をウィンドウ非表示で起動）を実行し、`data/prices/history.json` に当日分を追記する。node を直接叩くと
+   （node をウィンドウ非表示で起動）を実行し、データホームの `prices/history.json` に当日分を追記する。node を直接叩くと
    ログイン中に黒いコンソール窓が一瞬出るため、VBS ランチャーで非表示化している（ShotTTL の `run-hidden.vbs` 準拠：
    node 絶対パス＋PATH フォールバック・同期実行で exit code をタスクへ伝播・欠落時は `%APPDATA%\heatfolio\logs` へ記録）。
    `StartWhenAvailable`＝PCが落ちて逃した回は次回起動時に追いつく。
-2. ローカルサーバー: `scripts/serve-local.pyw` が `127.0.0.1:8080` で本ディレクトリを静的配信し、
-   加えて保有編集の保存API `POST /api/holdings` を提供する（JSON 検証 → 同ディレクトリの一時ファイルへ書き →
-   `os.replace` で原子置換。検証落ち・書き込み失敗時も既存 `holdings.json` は壊れない）。
-   ログオン時に自動起動する（HKCU `...\Run` の `heatfolio-server`）。`pythonw` はコンソールが無く
-   `http.server` の既定ログが stderr で落ちるため、`serve-local.pyw` は `log_message` を無効化している。
+2. ローカルサーバー: `heatfolio serve` が `127.0.0.1:8080` でパッケージの静的 UI を配信し、
+   保有編集の保存 API `POST /api/holdings` はデータホームを原子置換する。`GET /data/holdings.json` と
+   `GET /data/prices/history.json` もデータホームから返す。`scripts/serve-local.pyw` は Python の legacy 経路として残す。
 3. 外部アクセス: `tailscale serve --bg --https=8443 8080` が上記ポートを tailnet 内へ HTTPS 中継する（**tailnet only**）。
    アクセスは `https://<このマシン>.<tailnet>.ts.net:8443/`。Tailscale に参加している自分の端末だけが到達でき、認証は Tailscale が担う。
 

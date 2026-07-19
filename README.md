@@ -2,147 +2,133 @@
 
 **日本語** | [English](README_en.md)
 
-保有資産を四角いタイル（treemap）で俯瞰する、**口座連携なし・パスワード不要**の自分専用ダッシュボード。
-数量だけ登録しておけば、価格は日次バッチが公開ソース（Yahoo chart API）から自動取得する。
-**完全ローカル運用・外部非公開**（GitHub Pages やクラウドには一切出さない）。
-
-- 面積 = 評価額 / 色 = 騰落率（前日 / 1W / 1M / 1Y 切替、基準日を遡って表示も可）
-- 証券口座の ID/PW は一切扱わない。数量は売買した日だけ直す（画面から編集できる）
-- DB なし。価格履歴はローカルの JSON にたまり、それがそのまま時系列になる
+保有資産を四角いタイルで俯瞰する、口座連携なし、パスワード不要のローカル専用ダッシュボードです。
+面積は評価額、色は騰落率を表します。数量を自分で登録し、価格は Yahoo chart API から日次取得します。
+保有データをクラウドへ送らないことを設計の中心にしています。
 
 ![heatfolio の画面](docs/images/screenshot.png)
 
-（画面の Apple 5 株は demo です。銘柄名（コード）と数量、右上の Y / TV バッジで Yahoo Finance / TradingView に 1 クリックで飛べます）
+画面の Apple 5 株は合成サンプルです。
 
-## こんな人向け
+## 最短スタート
 
-**マネーフォワードや他の口座連携型ツールが便利なのは分かっているけれど、証券会社の ID/PW を第三者のアプリに預けるのがどうしても引っかかる**——という人のために作っています。
+一般ユーザーに必要なのは Node.js 20 以上だけです。npm 公開後は次の 1 コマンドで起動できます。
 
-大手の家計簿・資産管理サービスでも、過去には情報流出のインシデントが起きています。真面目にセキュリティに投資している会社でさえそうなのですから、より小規模な類似サービスや無料のクラウド SaaS で「大丈夫ですよ」と言われても、そこを鵜呑みにできる根拠は個人には無い。連携先を信じる/信じないの問題ではなく、**そもそも家計データを他社に預ける前提を採用するかどうか、を選び直す話**だと思っています。
+\`\`\`powershell
+npx --yes heatfolio@latest
+\`\`\`
 
-その代わり、以下のトレードオフを受け入れる必要があります:
+またはインストールして heatfolio コマンドを使えます。
 
-- **数量は自分で 1 度だけ入力する**（売買した日にだけ数字を直せば済む・画面から編集できる）
-- **価格の自動取得は Yahoo chart API（公開ソース）にだけ依存する**（塞がれても差し替えられる設計）
-- **閲覧はこの PC、または Tailscale を張っている自分の端末だけ**
-- **スマホからも見たい場合は、Tailscale アプリを入れて自分の tailnet に参加させておく手間が要る**
+\`\`\`powershell
+npm install --global heatfolio
+heatfolio
+\`\`\`
 
-その手間を「安心のコスト」と割り切れる人には、案外気持ちよく使えると思います。逆に、「数量入力すら面倒、口座連携で全自動を取りたい」と自分の判断として合理的だと思える人には、既存の口座連携型ツールのほうが素直に向いています（それは正しい選択です）。
+ブラウザで http://127.0.0.1:8080/ を開き、タイルをクリックして自分の銘柄と数量に差し替えてください。
+初回起動時はサンプルデータが自動で作られます。画面の保存ボタンでデータを更新できます。
 
-設計思想の詳細と実装の勘所は Qiita 記事に書きました:  
-「[口座連携なしで、保有資産をtreemapで俯瞰するローカル完結ダッシュボードの設計](https://qiita.com/ishizakahiroshi/items/b5da260733e416085421)」
+公開前にこのリポジトリから試す場合は、Git と Node.js 20 以上を用意して次を実行します。
 
-## 仕組み
+\`\`\`powershell
+git clone https://github.com/ishizakahiroshi/heatfolio.git
+cd heatfolio
+node scripts/heatfolio.mjs serve
+\`\`\`
 
-```
-data/holdings.json        保有（銘柄・数量・評価方法。手入力 or 画面から編集）
-data/prices/history.json  価格履歴（日次バッチが自動追記）
-scripts/fetch-prices.mjs  Yahoo chart API から終値取得
-scripts/run-fetch.vbs     上記をウィンドウ非表示で起動する launcher（タスク用）
-scripts/serve-local.pyw   ローカル配信サーバー＋保存API（127.0.0.1:8080）
-index.html                上を読み、評価額を計算して treemap 描画。タイルから編集も
-```
+### データの場所
 
-評価方法（`mode`）は3種類:
+アプリ本体とユーザーデータは分離されています。
 
-| mode | 評価額の出し方 | 用途 |
-|---|---|---|
-| `market` | 数量 × 価格(symbol) | 上場株（例: NTT `9432.T` / ソフトバンク `9434.T` / Apple `AAPL`） |
-| `proxy`  | baseValue × 価格 ÷ 基準日の価格 | 投信/DC を指数で近似（例: オルカン→`2559.T`、DC→`^GSPC`） |
-| `manual` | baseValue のまま固定 | 非上場など価格が取れないもの（例: SpaceX） |
+\`\`\`text
+%USERPROFILE%\\.heatfolio\\
+  holdings.json
+  prices\\history.json
+\`\`\`
 
-米国株など**ドル建て**の銘柄は、`market` に加えて `currency: "USD"` を付けると
-「数量 × ドル株価 × その日の USD/JPY 始値」で**円換算**する（編集画面の「通貨」で 円/米ドル を選ぶ）。
-USD 建て保有があるとき、`fetch-prices.mjs` は USD/JPY 始値も `JPY=X` として日次取得する。
-日本株のシンボルは `.T` が必要（例: 太陽誘電＝`6976.T`。`.T` 無しは Yahoo が 404 になる）。
+macOS と Linux では ~/.heatfolio/ です。現在のデータホームは次で確認できます。
 
-## 運用構成（このマシン）
+\`\`\`powershell
+heatfolio path
+\`\`\`
 
-完全ローカル。次の3つで動く（いずれも外部には出ない）:
+環境変数 HEATFOLIO_HOME または CLI の --home <dir> で保存先を変更できます。--home が最優先です。
+作者・コントリビューターがリポジトリ内の data/ を使う開発者モードは --dev または HEATFOLIO_DEV=1 です。
 
-1. **価格の自動更新** — Windows タスクスケジューラ `heatfolio-fetch-prices` が平日16:05に
-   `wscript.exe scripts\run-fetch.vbs`（node をウィンドウ非表示で起動）を実行し `history.json` に追記。
-   黒いコンソール窓が出ないよう VBS ランチャー経由にしている（PCが落ちて逃した回は次回起動時に追いつく）
-2. **ローカルサーバー** — `scripts/serve-local.pyw` が `127.0.0.1:8080` で配信＋保存API。
-   ログオン時に自動起動（`HKCU\...\Run` の `heatfolio-server`）
-3. **外部アクセス** — `tailscale serve --bg --https=8443 8080` が tailnet 内へ HTTPS 中継。
-   `https://<このマシン>.<tailnet>.ts.net:8443/` を自分の端末（Tailscale 参加済み）から開く
+## 価格の更新
 
-PC が起動している間だけ価格取得と閲覧が動く（個人用途では許容）。
+手動で価格を取得する場合は次を実行します。
 
-## 他端末で見る（Tailscale が正解）
+\`\`\`powershell
+heatfolio fetch
+\`\`\`
 
-同じ保有データを複数端末で見たいときは、**この PC で 1 台だけ heatfolio サーバーを動かして、他端末はブラウザで URL に接続する**のが正解です。Tailscale が入っていれば `https://<このマシン>.<tailnet>.ts.net:8443/` にスマホや別 PC から届きます。
+履歴はデータホームの prices/history.json に追記されます。Windows のタスクスケジューラで日次実行する場合は、
+プログラムを wscript.exe、引数をリポジトリ内の scripts\\run-fetch.vbs としてください。
+VBS は Node CLI をウィンドウ非表示で起動し、価格データはリポジトリではなくデータホームへ書き込みます。
 
-**やってはいけないこと**: 複数端末それぞれで独立に heatfolio を動かして `data/holdings.json` を手動同期する運用。heatfolio は書き込み競合を解決しない設計なので、後の書き込みが先の書き込みを潰します。データの持ち運びには JSON / CSV エクスポートを使ってください。
+## 画面と評価方法
 
-## 他ツールへの持ち出し・取り込み
+- 面積は評価額、色は前日、1W、1M、1Y の騰落率
+- タイルをクリックすると銘柄名、コード、分類、評価方法、シンボル、通貨、数量、評価額を編集可能
+- market: 数量 × 価格。上場株向け
+- proxy: 基準額 × 価格の変化。投信、DC、指数近似向け
+- manual: 基準額を固定。価格を自動取得できない資産向け
 
-- **JSON エクスポート**: 画面上部の `JSON` ボタンから `holdings-YYYY-MM-DD.json` をダウンロードします。中身は `data/holdings.json` と等価で、バックアップ・別 PC への移行・別ツールへの持ち出しに使えます
-- **CSV エクスポート**: `CSV` ボタンから銘柄・数量・評価額・騰落率を CSV でダウンロードします。Excel / Google スプレッドシートで分析するとき用です
-- **CSV インポート**: heatfolio 本体では実装しません。証券会社ごとに CSV フォーマットが違うためです。代わりに `scripts/import-samples/` に、証券会社の CSV を heatfolio JSON に変換するサンプルを置いています。自分の証券会社に合わせて Node.js スクリプトを 1 本書く運用にしてください
+米国株などのドル建て銘柄は、market に currency: "USD" を付けます。その日の USD/JPY 始値で円換算し、
+為替は JPY=X として履歴に保存します。日本株の Yahoo シンボルには .T を付けます。
 
-## 使い方
+## 他端末から見る
 
-**閲覧**: 上記の tailnet URL をブラウザで開く（スマホは Tailscale 接続が必要）。ローカルなら `http://127.0.0.1:8080/`
+heatfolio は同じデータホームを使う 1 台の PC でサーバーを動かし、他端末はブラウザで接続してください。
+Tailscale を使う場合の例です。
 
-**tile に出る情報**:
+\`\`\`powershell
+tailscale serve --bg --https=8443 8080
+tailscale serve status
+\`\`\`
 
-- 銘柄名 + 証券コード（例: `NTT (9432)` / `Apple (AAPL)`）
-- 評価額（円換算後）
-- 数量 + 単位（例: `100 株` / `5 株` / `13,329 口`）。単位は `type` から自動判定（国内/米国株→株、投信→口）するか、`unit` フィールドで明示指定
-- 前日比 or 選択期間の騰落率
-- 右上に **Yahoo Finance / TradingView へ 1 クリックで飛ぶバッジ**（`symbol` から自動でリンク先を組み立て。`.T` は Yahoo JP、指数や米国株は Yahoo US・TradingView は TSE/主要指数へ振り分け。`symbol` が無い銘柄ではバッジ非表示）
+表示された tailnet 限定 URL を、自分の Tailscale 参加端末で開きます。インターネットへ公開する構成ではありません。
+複数端末で別々のサーバーを動かして JSON を手動同期すると、後の保存が先の保存を上書きする可能性があります。
 
-**編集**: タイルをクリックすると編集パネルが開く。銘柄名・証券コード（tile 表示用）・分類・評価方法（market/proxy/manual）・シンボル（Yahoo 用）・通貨（JPY/USD）・数量・単位・評価額を編集できる。「＋ 銘柄を追加」で新規、赤い削除ボタン（誤操作防止で 2 回押し）で削除。`data/holdings.json` を手で直してもよい
+## エクスポートと取り込み
 
-**期間切替**（前日 / 1W / 1M / 1Y）と基準日で過去も遡れる（履歴が溜まった範囲）
+- 画面上部の JSON ボタンで holdings JSON を保存できます。バックアップや別 PC への移行に使えます
+- CSV ボタンで銘柄、数量、評価額、騰落率を保存できます
+- CSV の形式は証券会社ごとに異なるため、取り込み UI は持たせていません。scripts/import-samples/ に変換例があります
 
-## 制約（正直な注意）
+## 開発者向け
 
-- **投信/DC は指数近似**。基準価額そのものではなく、連動指数の変化率で評価額をドリフトさせている。
-  ズレが気になったら `baseValue` を今の実額に打ち直せば再アンカーされる
-- **非上場株など価格が取れないものは自動更新なし**（`manual`）。値を変えたい時は `baseValue` を手で更新
-- **DC の S&P500 は FX 無視**（USD指数のまま）。上げ下げ把握が目的なので許容
-- **1W/1M/1Y は履歴が溜まるほど計算される**（始めた日から積み上がる＝過去には遡れない）
-- 価格取得は `scripts/fetch-prices.mjs` の `fetchClose()` に集約。Yahoo が塞がれたらこの関数だけ差し替えれば復旧できる
+開発時は --dev でリポジトリ内の data/ をデータホームとして使えます。
 
-## 別のマシンで一から立てる
+\`\`\`powershell
+node scripts/heatfolio.mjs serve --dev
+node scripts/heatfolio.mjs fetch --dev
+\`\`\`
 
-1. Node 20+ と Python 3.7+ を用意
-2. サンプルをコピーして自分用にする（実データ `holdings.json` / `history.json` は `.gitignore` 対象で公開されない）:
-   ```
-   cp data/holdings.example.json data/holdings.json
-   cp data/prices/history.example.json data/prices/history.json
-   ```
-   `data/holdings.json` を自分の保有に編集（または起動後に画面の「＋ 銘柄を追加」で登録）
-3. `node scripts/fetch-prices.mjs` で初回の価格を取得
-4. `pythonw scripts/serve-local.pyw` でサーバー起動（常時使うなら `HKCU\...\Run` 等で自動起動に）
-5. `tailscale serve --bg --https=8443 8080` で自分の tailnet にだけ限定公開
-6. 平日の価格取得をタスクスケジューラに登録（このマシンでは `heatfolio-fetch-prices`）。
-   黒いコンソール窓を出さないため、タスクの起動プログラムは `wscript.exe`、引数を
-   `"…\scripts\run-fetch.vbs"` にする（node を直接指定すると窓が一瞬出る）
+既存のリポジトリ内 data/holdings.json があり、データホームが空またはサンプルだけの場合、Node CLI は初回起動時にホームへコピーします。
+リポジトリ側のファイルは削除しません。手動で移行する場合は次のようにします。
 
-管理コマンド:
+\`\`\`powershell
+New-Item -ItemType Directory -Force $HOME\\.heatfolio\\prices
+Copy-Item .\\data\\holdings.json $HOME\\.heatfolio\\holdings.json
+Copy-Item .\\data\\prices\\history.json $HOME\\.heatfolio\\prices\\history.json
+\`\`\`
 
-```
-node scripts/fetch-prices.mjs           # 価格を取得して history.json に追記
-pythonw scripts/serve-local.pyw         # ローカルサーバー手動起動
-tailscale serve status                  # 外部共有の状態
-tailscale serve --https=8443 off        # 外部共有を止める
-```
+scripts/serve-local.pyw は legacy の Python サーバーとして残しています。新規利用では heatfolio serve を使ってください。
+Node CLI は静的 UI をパッケージから配信し、/data/holdings.json と /data/prices/history.json だけをデータホームから読みます。
 
-## プライバシー（公開リポジトリでの扱い）
+## 制約とプライバシー
 
-このリポジトリは**アプリ本体と合成サンプルのみ**を公開する。自分の保有データは公開されない:
+- 証券口座の ID、パスワード、口座 API は扱いません
+- データベース、クラウド同期、外部ホスティングはありません
+- 価格は公開ソースに依存します。取得できない日は直近価格または基準額で表示します
+- 投信や DC の proxy は指数変化率による近似です
+- リポジトリに含まれるのは合成サンプルだけです。実データの holdings.json と history.json は公開対象外です
+- data/holdings.example.json と data/prices/history.example.json は構造確認用のサンプルです
 
-- `data/holdings.json`（実際の保有・金額）と `data/prices/history.json`（価格履歴）は `.gitignore` 対象で**コミットされない**
-- 公開されるのは `data/holdings.example.json` / `data/prices/history.example.json`（ダミー）だけ
-- fork/clone した各自が自分の `holdings.json` をローカルに作って使う（上の「別のマシンで一から立てる」参照）
-
-初回コミット前に必ず `git status` で `data/holdings.json` が追跡対象に入っていないことを確認すること。
+設計の詳細は Qiita の記事「[口座連携なしで、保有資産を treemap で俯瞰するローカル完結ダッシュボードの設計](https://qiita.com/ishizakahiroshi/items/b5da260733e416085421)」にまとめています。
 
 ## ライセンス
 
-コードは MIT（同梱の `LICENSE` を参照）。保有データ（`data/holdings.json`）は
-自分のローカルにのみ置き、外部（GitHub/クラウド等）へは出さないこと。
+MIT。詳細は [LICENSE](LICENSE) を参照してください。保有データは自分のローカルだけに置いてください。

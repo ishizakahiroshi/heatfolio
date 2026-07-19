@@ -1,19 +1,12 @@
 Option Explicit
 
-' run-fetch.vbs runs heatfolio's price-fetch CLI via Node with
-' NO console window, for Windows Task Scheduler use. Modeled on ShotTTL's
-' run-hidden.vbs: it resolves paths relative to this script, uses an absolute
-' node.exe path (falling back to PATH), fails loud into a log if node or the target
-' script is missing, and runs synchronously so Task Scheduler receives the real
-' Node exit code.
+' run-serve.vbs starts heatfolio's local dashboard via Node with
+' NO console window, for HKCU Run (sign-in autostart). Modeled on run-fetch.vbs:
+' absolute node.exe path (PATH fallback), repo cwd for one-time migration, and
+' async launch so login is not blocked by the long-running server.
 '
-' The CLI writes to the user data home (%USERPROFILE%\.heatfolio by default), not
-' the repository data directory. Existing repository data is migrated only when the
-' CLI sees it in the current working directory, so this launcher sets that directory.
-'
-' Task Scheduler action:
-'   Program/script : wscript.exe
-'   Add arguments  : "<repo>\scripts\run-fetch.vbs"  (このファイルの絶対パス)
+' HKCU\Software\Microsoft\Windows\CurrentVersion\Run\heatfolio-server:
+'   wscript.exe "<repo>\scripts\run-serve.vbs"
 
 Dim shell
 Dim fso
@@ -21,7 +14,6 @@ Dim scriptDir
 Dim jsScript
 Dim nodeExe
 Dim command
-Dim exitCode
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -36,23 +28,17 @@ End If
 
 nodeExe = fso.BuildPath(shell.ExpandEnvironmentStrings("%ProgramFiles%"), "nodejs\node.exe")
 If Not fso.FileExists(nodeExe) Then
-    ' Fall back to PATH resolution so unusual layouts still work.
     nodeExe = "node.exe"
 End If
 
-' Resolve the repository as the working directory for one-time legacy data migration.
+' Repo root as cwd so legacy data migration can see data/holdings.json once.
 shell.CurrentDirectory = fso.GetParentFolderName(scriptDir)
-command = Quote(nodeExe) & " " & Quote(jsScript) & " fetch"
+command = Quote(nodeExe) & " " & Quote(jsScript) & " serve"
 
-' Window style 0 keeps Node hidden (no black console window).
-' bWaitOnReturn = True so that Node's exit code propagates to Task Scheduler.
-exitCode = shell.Run(command, 0, True)
-WScript.Quit exitCode
+' Window style 0 = hidden. bWaitOnReturn = False so Run does not block logon.
+shell.Run command, 0, False
+WScript.Quit 0
 
-' Quote a single argument following the rules CommandLineToArgvW expects:
-'   - Embedded backslash runs that precede a double quote are doubled.
-'   - Each embedded double quote is then escaped as \".
-'   - Trailing backslashes (right before the closing quote) are doubled.
 Function Quote(value)
     Dim s, i, ch, backslashes, j, result
     s = CStr(value)
@@ -86,8 +72,6 @@ Function Quote(value)
     Quote = result
 End Function
 
-' Append a one-line ERROR record to %APPDATA%\heatfolio\logs\run-fetch_yyyymmdd.log
-' so launch-time failures (missing node / heatfolio.mjs) are visible without a console.
 Sub LogStartupError(message)
     Dim appData, baseDir, logDir, logFile, stream, stamp
 
@@ -107,7 +91,7 @@ Sub LogStartupError(message)
     End If
 
     stamp = FormatDateTime(Now, vbGeneralDate)
-    logFile = fso.BuildPath(logDir, "run-fetch_" & Year(Now) & Right("0" & Month(Now), 2) & Right("0" & Day(Now), 2) & ".log")
+    logFile = fso.BuildPath(logDir, "run-serve_" & Year(Now) & Right("0" & Month(Now), 2) & Right("0" & Day(Now), 2) & ".log")
     Set stream = fso.OpenTextFile(logFile, 8, True)
     If Not stream Is Nothing Then
         stream.WriteLine stamp & " [ERROR] " & message

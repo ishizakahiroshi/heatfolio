@@ -1,19 +1,24 @@
 // 日次バッチ：holdings.json に載っている symbol の終値を Yahoo Finance chart API から取得し、
-// data/prices/history.json に「その日の分」として追記する。
-// Node 20+ （グローバル fetch 使用）。ローカル実行: node scripts/fetch-prices.mjs
+// ユーザーデータホームの prices/history.json に「その日の分」として追記する。
+// Node 20+（グローバル fetch 使用）。通常は heatfolio fetch で実行する。
+// 直接実行する場合も --home / --dev / HEATFOLIO_HOME を解釈する。
 //
 // 【壊れたときの差し替えポイント】
 //   価格取得は fetchClose() に集約してある。Yahoo が塞がれたら、この関数だけを
 //   Alpha Vantage 等に差し替えれば復旧できる（他は触らなくてよい）。
 
-import { readFile, writeFile, rename, unlink } from "node:fs/promises";
+import { access, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import {
+  ensureDataHome,
+  maybeMigrateFromRepo,
+  paths,
+  resolveAppRoot,
+  resolveDataHome,
+} from "./lib/data-home.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const HOLDINGS = join(ROOT, "data", "holdings.json");
-const HISTORY = join(ROOT, "data", "prices", "history.json");
 const FX_SYMBOL = "JPY=X"; // Yahoo の USD/JPY（1ドル=約150円）。USD建て保有の円換算に使う
 
 // JST の当日日付（YYYY-MM-DD）。GitHub Actions は UTC で動くため +9h して日付を出す。
@@ -26,81 +31,84 @@ function todayJST() {
 async function fetchQuote(symbol, field = "close") {
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-    `?interval=1d&range=5d`;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+    "?interval=1d&range=5d";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const res = await fetch(url, {
         headers: { "User-Agent": "Mozilla/5.0 (portfolio-heatmap batch)" },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      const r = json?.chart?.result?.[0];
-      const series = r?.indicators?.quote?.[0]?.[field] ?? [];
-      // 直近の非nullな値を採用
-      for (let i = series.length - 1; i >= 0; i--) {
+      const result = json?.chart?.result?.[0];
+      const series = result?.indicators?.quote?.[0]?.[field] ?? [];
+      for (let i = series.length - 1; i >= 0; i -= 1) {
         if (series[i] != null) {
-          const n = Number(series[i]);
-          if (Number.isFinite(n)) return n;
+          const number = Number(series[i]);
+          if (Number.isFinite(number)) return number;
         }
       }
       throw new Error(`no ${field} data`);
-    } catch (e) {
-      console.warn(`  [${symbol}] attempt ${attempt} failed: ${e.message}`);
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    } catch (error) {
+      console.warn(`  [${symbol}] attempt ${attempt} failed: ${error.message}`);
+      if (attempt < 3) await new Promise((resolveDelay) => setTimeout(resolveDelay, 1500 * attempt));
     }
   }
-  return null; // 取得失敗は null（その日は欠測扱い。表示側は直近値でフォールバック）
+  return null;
 }
 
 // 個別株は終値を使う。
-async function fetchClose(symbol) {
+export async function fetchClose(symbol) {
   return fetchQuote(symbol, "close");
 }
 
 /** history.json を一時ファイル経由で原子置換する（途中 kill で壊さない） */
-async function writeHistoryAtomic(history) {
-  const dir = dirname(HISTORY);
-  const tmp = join(dir, `.history-${randomBytes(8).toString("hex")}.tmp`);
-  const body = JSON.stringify(history, null, 2) + "\n";
+async function writeHistoryAtomic(historyPath, history) {
+  const dir = dirname(historyPath);
+  const tempPath = join(dir, `.history-${randomBytes(8).toString("hex")}.tmp`);
+  const body = `${JSON.stringify(history, null, 2)}\n`;
   try {
-    await writeFile(tmp, body, "utf8");
-    await rename(tmp, HISTORY);
-  } catch (e) {
+    await writeFile(tempPath, body, "utf8");
+    await rename(tempPath, historyPath);
+  } catch (error) {
     try {
-      await unlink(tmp);
+      await unlink(tempPath);
     } catch {
-      /* ignore cleanup errors */
+      // Ignore cleanup errors and preserve the original error.
     }
-    throw e;
+    throw error;
   }
 }
 
-async function main() {
+export async function runFetch({ home }) {
+  const dataPaths = paths(home);
   let holdings;
   try {
-    holdings = JSON.parse(await readFile(HOLDINGS, "utf8"));
-  } catch (e) {
-    throw new Error(`failed to read holdings.json: ${e.message}`);
+    holdings = JSON.parse(await readFile(dataPaths.holdings, "utf8"));
+  } catch (error) {
+    throw new Error(`failed to read holdings.json: ${error.message}`);
   }
   if (!Array.isArray(holdings?.holdings)) {
     throw new Error("holdings.json: top-level.holdings must be an array");
   }
 
-  // 履歴が無い fresh clone でも動くよう、無ければ空で開始する
   let history;
   try {
-    history = JSON.parse(await readFile(HISTORY, "utf8"));
+    history = JSON.parse(await readFile(dataPaths.history, "utf8"));
   } catch {
     history = { prices: {} };
   }
-  if (!history.prices || typeof history.prices !== "object") history.prices = {};
+  if (!history.prices || typeof history.prices !== "object" || Array.isArray(history.prices)) {
+    history.prices = {};
+  }
 
-  // 取得対象の symbol を重複なく集める（manual や symbol なしは除外）
   const symbols = [
     ...new Set(
       holdings.holdings
-        .filter((h) => h && h.mode !== "manual" && typeof h.symbol === "string" && h.symbol)
-        .map((h) => h.symbol)
+        .filter((holding) =>
+          holding && holding.mode !== "manual" &&
+          typeof holding.symbol === "string" && holding.symbol
+        )
+        .map((holding) => holding.symbol)
     ),
   ];
 
@@ -108,20 +116,20 @@ async function main() {
   const row = { ...(history.prices[date] || {}) };
 
   console.log(`Fetching ${symbols.length} symbols for ${date} ...`);
-  for (const sym of symbols) {
-    const close = await fetchClose(sym);
+  for (const symbol of symbols) {
+    const close = await fetchClose(symbol);
     if (close != null) {
-      row[sym] = close;
-      console.log(`  ${sym} = ${close}`);
+      row[symbol] = close;
+      console.log(`  ${symbol} = ${close}`);
     } else {
-      console.log(`  ${sym} = (取得失敗・スキップ)`);
+      console.log(`  ${symbol} = (取得失敗・スキップ)`);
     }
-    await new Promise((r) => setTimeout(r, 400)); // 軽いレート対策
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 400));
   }
 
-  // USD 建て保有（market・symbol あり）があれば、USD/JPY の「始値」も取得して円換算に使う
   const needsFx = holdings.holdings.some(
-    (h) => h && h.currency === "USD" && h.mode !== "manual" && h.symbol
+    (holding) =>
+      holding && holding.currency === "USD" && holding.mode !== "manual" && holding.symbol
   );
   if (needsFx) {
     const fx = await fetchQuote(FX_SYMBOL, "open");
@@ -139,11 +147,55 @@ async function main() {
   }
 
   history.prices[date] = row;
-  await writeHistoryAtomic(history);
+  await writeHistoryAtomic(dataPaths.history, history);
   console.log(`Wrote ${Object.keys(row).length} prices to history for ${date}.`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+async function exists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseDirectOptions(argv) {
+  let home;
+  let dev = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--dev") {
+      dev = true;
+      continue;
+    }
+    if (argv[i] === "--home") {
+      home = argv[++i];
+      if (!home || home.startsWith("--")) throw new Error("--home requires a value");
+      continue;
+    }
+    throw new Error(`unknown option: ${argv[i]}`);
+  }
+  return { home, dev };
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const options = parseDirectOptions(argv);
+  const appRoot = resolveAppRoot();
+  const home = resolveDataHome({ home: options.home, dev: options.dev, appRoot });
+  const repoDataDir = options.dev || process.env.HEATFOLIO_DEV === "1"
+    ? join(appRoot, "data")
+    : join(process.cwd(), "data");
+  if (await exists(join(repoDataDir, "holdings.json"))) {
+    await maybeMigrateFromRepo(home, repoDataDir);
+  }
+  await ensureDataHome(home, appRoot);
+  await runFetch({ home });
+}
+
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
+if (invokedPath && fileURLToPath(import.meta.url) === invokedPath) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

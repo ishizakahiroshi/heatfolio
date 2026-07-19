@@ -1,7 +1,7 @@
 {
   "meta": {
     "baseCurrency": "JPY",
-    "note": "サンプル。data/holdings.example.json を data/holdings.json にコピーして、自分の保有に書き換えて使う。実データ(holdings.json)は .gitignore で公開対象外。",
+    "note": "サンプル。Node CLI の初回起動時に ~/.heatfolio/holdings.json へコピーされる。画面から自分の保有に書き換えて使う。実データは公開対象外。",
     "modes": {
       "market": "評価額 = quantity × 価格(symbol)。上場株向け。price 未取得の間は baseValue で表示。",
       "proxy": "評価額 = baseValue × 価格(symbol) / baseDate時点の価格。投信/DC/指数近似向け。",

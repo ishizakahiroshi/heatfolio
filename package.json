@@ -1,0 +1,24 @@
+{
+  "name": "heatfolio",
+  "version": "0.2.0",
+  "description": "Local-only portfolio treemap dashboard (no broker login)",
+  "type": "module",
+  "bin": {
+    "heatfolio": "scripts/heatfolio.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.html",
+    "scripts/**/*.mjs",
+    "scripts/**/*.pyw",
+    "scripts/**/*.vbs",
+    "data/holdings.example.json",
+    "data/prices/history.example.json",
+    "LICENSE",
+    "README.md",
+    "README_en.md"
+  ],
+  "license": "MIT"
+}

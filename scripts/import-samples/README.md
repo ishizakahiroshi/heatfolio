@@ -1,14 +1,14 @@
 # import-samples
 
-証券会社の CSV を `data/holdings.json` に変換する Node.js サンプルスクリプト置き場です。
+証券会社の CSV を holdings JSON に変換する Node.js サンプルスクリプト置き場です。通常の保存先はデータホームです。
 
 heatfolio 本体は CSV import を実装していません。証券会社ごとにフォーマットが違うためです。代わりに、ここに証券会社別の変換スクリプトを積み上げます。自分の使う証券会社の CSV に合わせて 1 本書けば十分です。
 
 ## 使い方
 
 ```powershell
-node scripts/import-samples/<broker>.mjs <input.csv> > data/holdings.json.new
-# 内容を確認したら data/holdings.json.new を data/holdings.json に置き換える
+node scripts/import-samples/<broker>.mjs <input.csv> > $HOME/.heatfolio/holdings.json.new
+# 内容を確認したら holdings.json.new を holdings.json に置き換える
 ```
 
 標準出力には保有情報が含まれます。コマンドの出力をチャットや公開場所に貼り付けないでください。
