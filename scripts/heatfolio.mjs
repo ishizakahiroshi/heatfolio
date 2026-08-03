@@ -72,9 +72,8 @@ async function prepareDataHome(options) {
     dev: options.dev,
     appRoot: APP_ROOT,
   });
-  const repoDataDir = options.dev || process.env.HEATFOLIO_DEV === "1"
-    ? join(APP_ROOT, "data")
-    : join(process.cwd(), "data");
+  // Migration source is always package/repo appRoot/data (never ambient cwd).
+  const repoDataDir = join(APP_ROOT, "data");
   const repoHoldings = join(repoDataDir, "holdings.json");
   if (await fileExists(repoHoldings)) await maybeMigrateFromRepo(home, repoDataDir);
   await ensureDataHome(home, APP_ROOT);

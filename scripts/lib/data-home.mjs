@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile } from "node:fs/promises";
+import { access, copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -48,24 +48,6 @@ async function exists(filePath) {
   }
 }
 
-async function readJsonIfPresent(filePath) {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function looksLikeExampleHoldings(value) {
-  const note = value?.meta?.note;
-  return typeof note === "string" && (note.includes("サンプル") || note.includes("sample"));
-}
-
-function looksLikeEmptyHistory(value) {
-  const prices = value?.prices;
-  return prices && typeof prices === "object" && !Array.isArray(prices) && Object.keys(prices).length === 0;
-}
-
 /**
  * Create a user data home and seed only missing files from package examples.
  * Existing holdings and history are never overwritten.
@@ -96,7 +78,8 @@ export async function ensureDataHome(home, appRoot = resolveAppRoot()) {
 }
 
 /**
- * Copy an existing repository data set into an empty/example user home once.
+ * One-shot: copy repository data into a missing user home holdings file only.
+ * Never overwrites an existing home holdings/history (sample note was a footgun).
  * The repository files are intentionally retained and never deleted.
  */
 export async function maybeMigrateFromRepo(home, repoDataDir) {
@@ -108,18 +91,17 @@ export async function maybeMigrateFromRepo(home, repoDataDir) {
     return { migrated: false, home: target.home };
   }
 
-  const current = await readJsonIfPresent(target.holdings);
-  const canMigrateHoldings = !(await exists(target.holdings)) || looksLikeExampleHoldings(current);
-  if (!canMigrateHoldings) return { migrated: false, home: target.home };
+  // Existing home holdings (including still-sample meta.note) are never overwritten.
+  if (await exists(target.holdings)) {
+    return { migrated: false, home: target.home };
+  }
 
   await mkdir(target.pricesDir, { recursive: true });
   await copyFile(source.holdings, target.holdings);
 
-  const sourceHistoryExists = await exists(source.history);
-  const currentHistory = await readJsonIfPresent(target.history);
-  const canMigrateHistory =
-    sourceHistoryExists && (!(await exists(target.history)) || looksLikeEmptyHistory(currentHistory));
-  if (canMigrateHistory) await copyFile(source.history, target.history);
+  if (await exists(source.history) && !(await exists(target.history))) {
+    await copyFile(source.history, target.history);
+  }
 
   console.error(`Migrated repository data: ${source.holdings} -> ${target.holdings}`);
   return { migrated: true, home: target.home };

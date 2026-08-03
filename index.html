@@ -212,17 +212,28 @@ function qtyDisplay(h){
   const u=unitFor(h);
   return q.toLocaleString("ja-JP")+(u?" "+u:"");
 }
+// http(s) のみ許可（javascript: / data: による stored XSS を防ぐ）
+function safeHttpUrl(u){
+  if(u==null||u==="") return null;
+  try{
+    const x=new URL(String(u));
+    if(x.protocol==="http:"||x.protocol==="https:") return x.href;
+  }catch(e){}
+  return null;
+}
 // 外部リンクを symbol から自動判定（holdings.json の links フィールドで上書き可）
 function externalLinks(h){
   const l=h.links||{}, s=h.symbol, out={};
-  if(l.yahoo) out.yahoo=l.yahoo;
+  const overrideY=safeHttpUrl(l.yahoo);
+  if(overrideY) out.yahoo=overrideY;
   else if(s){
     // 日本の指数 (^N225, ^TPX) と .T / =X は Yahoo JP、それ以外は Yahoo US
     const isJpIndex=(s==="^N225"||s==="^TPX"||s==="^N300");
     if(s.endsWith(".T")||s.includes("=X")||isJpIndex) out.yahoo=`https://finance.yahoo.co.jp/quote/${encodeURIComponent(s)}`;
     else out.yahoo=`https://finance.yahoo.com/quote/${encodeURIComponent(s)}`;
   }
-  if(l.tradingview) out.tradingview=l.tradingview;
+  const overrideTv=safeHttpUrl(l.tradingview);
+  if(overrideTv) out.tradingview=overrideTv;
   else if(s){
     if(s.endsWith(".T")) out.tradingview=`https://www.tradingview.com/symbols/TSE-${encodeURIComponent(s.slice(0,-2))}/`;
     else if(s==="^GSPC") out.tradingview="https://www.tradingview.com/symbols/SPX/";
@@ -247,7 +258,10 @@ function anchorPrice(sym){
   for(const d of state.dates){ const v=state.prices[d]?.[sym]; if(v!=null&&isFinite(v)) return v; }
   return null;
 }
-function fxAt(date){ return priceAt("JPY=X", date); }   // その日のUSD/JPY始値（円/ドル）
+function fxAt(date){
+  const v=priceAt("JPY=X", date);               // その日のUSD/JPY始値（円/ドル）
+  return (v!=null&&isFinite(v)&&v>0)?v:null;    // 0 以下は未取得扱い
+}
 // YYYY-MM-DD から days 日（負も可）ずらした日付文字列。TZ に依存しない。
 function addDaysYMD(ymd, days){
   const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
@@ -258,10 +272,12 @@ function addDaysYMD(ymd, days){
 }
 function valueAt(h, date){
   const fallback = (typeof h.baseValue==="number"&&isFinite(h.baseValue)) ? h.baseValue : 0;
-  if(h.mode==="manual") return fallback;
+  // サーバ validateHoldings と同様、mode 省略は market（旧: 省略が proxy 経路に落ちていた）
+  const mode = h.mode || "market";
+  if(mode==="manual") return fallback;
   const p = priceAt(h.symbol, date);
   if(p==null) return fallback;                 // 価格が未取得ならbaseValueで表示
-  if(h.mode==="market"){
+  if(mode==="market"){
     const q = h.quantity;
     if(typeof q!=="number"||!isFinite(q)) return fallback; // 数量未設定は baseValue
     if(h.currency==="USD"){
@@ -273,6 +289,7 @@ function valueAt(h, date){
     const v = q * p;
     return isFinite(v) ? v : fallback;
   }
+  if(mode!=="proxy") return fallback;          // 未知 mode は proxy に落とさない
   const a = anchorPrice(h.symbol);
   if(a==null || a===0) return fallback;
   const v = fallback * p / a;                  // proxy: baseDate比でドリフト
@@ -280,18 +297,24 @@ function valueAt(h, date){
 }
 // 基準日 asof に対して period 日前の参照日を探して騰落率を返す
 function pctFor(h, asof, period){
-  if(h.mode==="manual") return null;              // 非追跡は「—」
+  const mode = h.mode || "market";
+  if(mode==="manual") return null;              // 非追跡は「—」
   // 価格（USD なら FX も）が両日揃わないときは baseValue フォールバックで偽 0% になるのを防ぐ
   if(priceAt(h.symbol, asof)==null) return null;
-  if(h.mode==="market" && h.currency==="USD" && fxAt(asof)==null) return null;
-  if(h.mode==="market" && (typeof h.quantity!=="number"||!isFinite(h.quantity))) return null;
+  if(mode==="market" && h.currency==="USD" && fxAt(asof)==null) return null;
+  if(mode==="market" && (typeof h.quantity!=="number"||!isFinite(h.quantity))) return null;
+  if(mode==="proxy"){
+    const a=anchorPrice(h.symbol);
+    if(a==null||a===0) return null;
+  }
+  if(mode!=="market"&&mode!=="proxy") return null;
   const cut = addDaysYMD(asof, -period);
   if(!cut) return null;
   let refDate=null;
   for(let i=state.dates.length-1;i>=0;i--){ if(state.dates[i]<=cut){ refDate=state.dates[i]; break; } }
   if(!refDate) return null;
   if(priceAt(h.symbol, refDate)==null) return null;
-  if(h.mode==="market" && h.currency==="USD" && fxAt(refDate)==null) return null;
+  if(mode==="market" && h.currency==="USD" && fxAt(refDate)==null) return null;
   const now=valueAt(h,asof), ref=valueAt(h,refDate);
   if(ref==null||ref===0||!isFinite(now)||!isFinite(ref)) return null;
   return (now/ref-1)*100;
@@ -360,16 +383,20 @@ function render(){
   }
   document.getElementById("legendLabel").textContent="色 = "+label;
 
+  // layoutValue は面積用、value は経済評価額（0 以下でもラベルは本物を出す）
   const forMap=enriched.map(h=>({
     ...h,
-    value:(h.value>0&&isFinite(h.value))?h.value:minArea
+    layoutValue:(h.value>0&&isFinite(h.value))?h.value:minArea
   }));
-  const tiles=squarify(forMap,0,0,W,H);
+  const tiles=squarify(forMap.map(h=>({...h,value:h.layoutValue})),0,0,W,H);
   const svgns="http://www.w3.org/2000/svg";
   const svg=document.createElementNS(svgns,"svg");
   svg.setAttribute("width",W); svg.setAttribute("height",H); svg.style.display="block";
 
   tiles.forEach(t=>{
+    // squarify には layoutValue を渡しているため、表示は enriched の経済評価額を _idx で引き直す
+    const src=enriched.find(h=>h._idx===t._idx);
+    const displayYen=src&&isFinite(src.value)?src.value:0;
     const big=t.w>78&&t.h>50, mid=t.w>54&&t.h>32;
     const fs=Math.max(11,Math.min(18,Math.sqrt(t.w*t.h)/8));
     const g=document.createElementNS(svgns,"g");
@@ -381,7 +408,7 @@ function render(){
     rect.style.cursor="pointer";
     rect.addEventListener("click",()=>openEditor(t._idx));
     const title=document.createElementNS(svgns,"title");
-    title.textContent=`${t.name} / ¥${yen(t.value)} / ${pctStr(t.pct)}`;
+    title.textContent=`${t.name} / ¥${yen(displayYen)} / ${pctStr(t.pct)}`;
     rect.appendChild(title); g.appendChild(rect);
     // ラベルは foreignObject(HTML) で描画し、長い銘柄名はタイル幅で自動折り返しする
     if(mid){
@@ -429,7 +456,7 @@ function render(){
       box.appendChild(nameEl);
       if(big){
         const valEl=document.createElementNS(XHTML,"div");
-        valEl.textContent="¥"+yen(t.value);
+        valEl.textContent="¥"+yen(displayYen);
         valEl.setAttribute("style",`margin-top:2px;font-size:${Math.max(10,fs-3)}px;`+
           `color:rgba(255,255,255,.82);font-variant-numeric:tabular-nums;`);
         box.appendChild(valEl);
@@ -482,7 +509,9 @@ function downloadJson(){
 }
 function csvEscape(value){
   if(value==null) return "";
-  const text=String(value);
+  let text=String(value);
+  // Excel 等の数式インジェクション対策（先頭 = + - @）
+  if(/^[=+\-@]/.test(text)) text="'"+text;
   return /[,"\r\n]/.test(text) ? `"${text.replace(/"/g,'""')}"` : text;
 }
 function toCsv(){
@@ -569,12 +598,22 @@ function openEditor(idx){
 function closeEditor(){ document.getElementById("overlay").classList.remove("open"); }
 
 async function postDoc(){
+  if(!state.doc||typeof state.doc!=="object") state.doc={holdings:state.holdings};
+  if(!state.doc.meta||typeof state.doc.meta!=="object") state.doc.meta={};
   const res=await fetch("/api/holdings",{
     method:"POST", headers:{"Content-Type":"application/json"},
     body:JSON.stringify(state.doc)
   });
   let j={}; try{ j=await res.json(); }catch(e){}
+  if(res.status===409){
+    throw new Error("他の端末で更新されています。ページを再読み込みしてからやり直してください");
+  }
   if(!res.ok||!j.ok) throw new Error(j.error||("HTTP "+res.status));
+  // サーバが採番した rev を反映（次回保存の楽観ロック用）
+  if(typeof j.rev==="number"&&isFinite(j.rev)){
+    if(!state.doc.meta||typeof state.doc.meta!=="object") state.doc.meta={};
+    state.doc.meta.rev=j.rev;
+  }
 }
 async function onSave(){
   const name=document.getElementById("f_name").value.trim();
@@ -627,7 +666,7 @@ async function onDelete(){
   btn.disabled=true; btn.textContent="削除中…";
   try{ await postDoc(); closeEditor(); render(); toast("削除しました"); }
   catch(e){ state.holdings=snapshot; state.doc.holdings=snapshot; render(); toast("削除に失敗: "+e.message,true); }
-  finally{ btn.disabled=false; deleteArmed=false; }
+  finally{ btn.disabled=false; deleteArmed=false; btn.textContent="この銘柄を削除"; }
 }
 
 async function boot(){

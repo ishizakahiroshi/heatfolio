@@ -67,7 +67,7 @@ async function writeHistoryAtomic(historyPath, history) {
   const tempPath = join(dir, `.history-${randomBytes(8).toString("hex")}.tmp`);
   const body = `${JSON.stringify(history, null, 2)}\n`;
   try {
-    await writeFile(tempPath, body, "utf8");
+    await writeFile(tempPath, body, { encoding: "utf8", flag: "wx" });
     await rename(tempPath, historyPath);
   } catch (error) {
     try {
@@ -101,14 +101,16 @@ export async function runFetch({ home }) {
     history.prices = {};
   }
 
+  const SYMBOL_RE = /^[A-Za-z0-9^._=\-]{1,32}$/;
   const symbols = [
     ...new Set(
       holdings.holdings
         .filter((holding) =>
           holding && holding.mode !== "manual" &&
-          typeof holding.symbol === "string" && holding.symbol
+          typeof holding.symbol === "string" && holding.symbol &&
+          SYMBOL_RE.test(holding.symbol.trim())
         )
-        .map((holding) => holding.symbol)
+        .map((holding) => holding.symbol.trim())
     ),
   ];
 
@@ -182,9 +184,8 @@ async function main(argv = process.argv.slice(2)) {
   const options = parseDirectOptions(argv);
   const appRoot = resolveAppRoot();
   const home = resolveDataHome({ home: options.home, dev: options.dev, appRoot });
-  const repoDataDir = options.dev || process.env.HEATFOLIO_DEV === "1"
-    ? join(appRoot, "data")
-    : join(process.cwd(), "data");
+  // Migration source is always package/repo appRoot/data (never ambient cwd).
+  const repoDataDir = join(appRoot, "data");
   if (await exists(join(repoDataDir, "holdings.json"))) {
     await maybeMigrateFromRepo(home, repoDataDir);
   }

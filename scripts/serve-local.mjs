@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 import { access, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { dirname, extname, relative, resolve, sep, join } from "node:path";
+import { dirname, extname, relative, resolve, sep, join, isAbsolute } from "node:path";
 
 const MAX_BODY = 1_000_000;
+/** Yahoo chart 向けのゆるいティッカー字形（9432.T / AAPL / ^N225 / JPY=X） */
+const SYMBOL_RE = /^[A-Za-z0-9^._=\-]{1,32}$/;
 const BLOCKED_SEGMENTS = new Set([
   ".git",
   ".env",
@@ -37,6 +39,16 @@ function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isSafeHttpUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function validateHoldings(obj) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return "top-level must be an object";
   const holdings = obj.holdings;
@@ -65,6 +77,10 @@ export function validateHoldings(obj) {
         (typeof holding.symbol !== "string" || !holding.symbol.trim())) {
       return `holdings[${i}].symbol is required for ${mode}`;
     }
+    if ((mode === "market" || mode === "proxy") && holding.symbol != null &&
+        !SYMBOL_RE.test(String(holding.symbol).trim())) {
+      return `holdings[${i}].symbol has invalid characters`;
+    }
     if (mode === "market" && !finiteNumber(holding.quantity)) {
       return `holdings[${i}].quantity must be a finite number for market`;
     }
@@ -72,14 +88,39 @@ export function validateHoldings(obj) {
         !finiteNumber(holding.quantity)) {
       return `holdings[${i}].quantity must be a finite number or null`;
     }
+    const links = holding.links;
+    if (links != null) {
+      if (typeof links !== "object" || Array.isArray(links)) {
+        return `holdings[${i}].links must be an object`;
+      }
+      for (const key of ["yahoo", "tradingview"]) {
+        if (links[key] != null && links[key] !== "" && !isSafeHttpUrl(links[key])) {
+          return `holdings[${i}].links.${key} must be http(s) URL`;
+        }
+      }
+    }
   }
   return null;
+}
+
+/** Collapse ./ and empty segments; reject .. and NUL. */
+export function normalizePathname(pathname) {
+  if (typeof pathname !== "string" || pathname.includes("\0")) return null;
+  const parts = [];
+  for (const part of pathname.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") return null;
+    parts.push(part);
+  }
+  return `/${parts.join("/")}`;
 }
 
 function parseRequestUrl(req) {
   try {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    return { pathname: decodeURIComponent(url.pathname) };
+    const pathname = normalizePathname(decodeURIComponent(url.pathname));
+    if (!pathname) return null;
+    return { pathname };
   } catch {
     return null;
   }
@@ -95,6 +136,14 @@ function isBlockedPath(pathname) {
     part === "AGENTS.local.md" ||
     part === "CLAUDE.local.md"
   );
+}
+
+function isInsideRoot(root, filePath) {
+  const rel = relative(root, filePath);
+  if (!rel || rel === "") return true;
+  if (isAbsolute(rel)) return false;
+  if (rel === ".." || rel.startsWith(`..${sep}`)) return false;
+  return true;
 }
 
 function sendJson(res, status, payload, head = false) {
@@ -131,12 +180,25 @@ async function sendDataFile(res, filePath, label, head) {
   }
 }
 
+/** Package static surface is intentionally tiny (UI shell only). */
+function isAllowedStaticPath(pathname) {
+  return pathname === "/" || pathname === "/index.html";
+}
+
 async function sendStaticFile(res, appRoot, pathname, head) {
   const root = resolve(appRoot);
+  // User data lives in the data home, never under package static /data/*
+  if (pathname === "/data" || pathname.startsWith("/data/")) {
+    sendText(res, 404, "Not Found", head);
+    return;
+  }
+  if (!isAllowedStaticPath(pathname)) {
+    sendText(res, 404, "Not Found", head);
+    return;
+  }
   const relativePath = pathname === "/" ? "index.html" : pathname.slice(1);
   const filePath = resolve(root, relativePath);
-  const rel = relative(root, filePath);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || rel.includes(`..${sep}`) || isBlockedPath(pathname)) {
+  if (isBlockedPath(pathname) || !isInsideRoot(root, filePath)) {
     sendText(res, 404, "Not Found", head);
     return;
   }
@@ -151,6 +213,17 @@ async function sendStaticFile(res, appRoot, pathname, head) {
     else res.end();
   } catch {
     sendText(res, 404, "Not Found", head);
+  }
+}
+
+/** Read current meta.rev (missing/legacy file → null). */
+async function readHoldingsRev(holdingsPath) {
+  try {
+    const current = JSON.parse(await readFile(holdingsPath, "utf8"));
+    const rev = current?.meta?.rev;
+    return typeof rev === "number" && Number.isFinite(rev) ? rev : null;
+  } catch {
+    return null;
   }
 }
 
@@ -211,13 +284,44 @@ async function handlePost(req, res, pathname, holdingsPath) {
     return;
   }
 
+  let nextRev;
   try {
-    await withWriteLock(() => writeHoldingsAtomic(holdingsPath, value));
+    await withWriteLock(async () => {
+      const serverRev = await readHoldingsRev(holdingsPath);
+      const clientRev = value?.meta?.rev;
+      const clientRevNum = typeof clientRev === "number" && Number.isFinite(clientRev) ? clientRev : null;
+
+      // Optimistic concurrency: once the file has a rev, client must send the same rev.
+      // Legacy files without rev accept the first write and stamp rev=1.
+      if (serverRev != null && clientRevNum !== serverRev) {
+        const err = new Error(
+          "conflict: holdings were updated elsewhere; reload and try again"
+        );
+        err.code = "CONFLICT";
+        err.serverRev = serverRev;
+        throw err;
+      }
+
+      if (!value.meta || typeof value.meta !== "object" || Array.isArray(value.meta)) {
+        value.meta = {};
+      }
+      nextRev = serverRev == null ? 1 : serverRev + 1;
+      value.meta.rev = nextRev;
+      await writeHoldingsAtomic(holdingsPath, value);
+    });
   } catch (error) {
+    if (error && error.code === "CONFLICT") {
+      sendJson(res, 409, {
+        ok: false,
+        error: error.message,
+        rev: error.serverRev,
+      });
+      return;
+    }
     sendJson(res, 500, { ok: false, error: `write failed: ${error.message}` });
     return;
   }
-  sendJson(res, 200, { ok: true });
+  sendJson(res, 200, { ok: true, rev: nextRev });
 }
 
 function bindHost(host) {

@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "test": "node --test scripts/serve-local.test.mjs"
+  },
   "files": [
     "index.html",
     "scripts/**/*.mjs",
