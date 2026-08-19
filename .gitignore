@@ -70,3 +70,6 @@ __pycache__/
 .terraform/
 .serverless/
 **/supabase/.temp/
+# === obsidian-link: managed ===
+/docs/obsidian/
+# === /obsidian-link: managed ===
