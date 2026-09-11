@@ -73,3 +73,7 @@ __pycache__/
 # === obsidian-link: managed ===
 /docs/obsidian/
 # === /obsidian-link: managed ===
+
+# docsweep が状態を書く場所（ラベル履歴・postpone 回数）。実行時の作業ファイルで
+# ソースではない。promote / relabel / sweep のたびに書き換わる
+.docsweep/
