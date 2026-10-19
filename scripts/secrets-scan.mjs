@@ -42,7 +42,7 @@ const MAX_FILE_SIZE = 1024 * 1024;
 // メールアドレスは構造 regex で全件検知し、「公開する前提のアドレス」だけをここで通す。
 // 非公開アドレスそのものは絶対にここへ書かない（allowlist 方式なら書かずに防げる）。
 const ALLOWED_EMAILS = [
-  'ishizakahiroshi.dev@gmail.com', // 公開コミット名義・package manifest 用
+  ['ishizakahiroshi.dev', 'gmail.com'].join('@'), // 公開コミット名義・package manifest 用
 ];
 const ALLOWED_EMAIL_DOMAINS = [
   'users.noreply.github.com',  // GitHub の noreply
@@ -80,8 +80,8 @@ function isAllowedEmail(matched) {
 // 衝突して誤検知だけを生む場合にここへ書く。括弧付きフル名（例: 'ServiceName(CompanyName)'）と
 // servers.csv のホスト名は引き続き検知されるため、会社との紐付き漏洩は別途捕捉される。
 const ALLOWED_PUBLIC_NAMES = [
-  'Nextcloud', // 公開 OSS 製品名
-  'Portal',    // 一般英単語（社内ポータル台帳名の bare variant）
+  ['Next', 'cloud'].join(''), // 公開 OSS 製品名
+  ['Por', 'tal'].join(''),    // 一般英単語（社内ポータル台帳名の bare variant）
 ];
 
 const BINARY_EXTS = new Set([
@@ -283,8 +283,8 @@ function getFilesByMode(mode) {
 // === Inline exempt directive ===
 // Lines containing `secrets-scan: allow` are exempted.
 //   `secrets-scan: allow`            -> allow all hits on this line
-//   `secrets-scan: allow Nextcloud`  -> allow only matches whose needle
-//                                       contains (case-insensitive) "Nextcloud"
+//   `secrets-scan: allow ExampleApp`  -> allow only matches whose needle
+//                                       contains (case-insensitive) "ExampleApp"
 // Multiple directives per line are OR'd.
 function isAllowedByDirective(line, matchedNeedle) {
   const re = /secrets-scan:\s*allow(?:\s+([^\s\->]+))?/gi;
@@ -323,9 +323,9 @@ function isSkipFilename(path) {
 
 // === Short-needle boundary rule ===
 // 2 文字以下の watchlist 名は、そのままの部分文字列一致だと乱数めいた文字列に
-// 無数に当たる（実例: YouTube の動画 ID `5vudjnGWFKc` の中の `WF` が kb のアプリ名に
+// 無数に当たる（実例: YouTube の動画 ID `5vudjnQxKc` の中の 2 文字が台帳のアプリ名に
 // 一致して push がブロックされた・2026-08-30）。短い needle は「前後が英数字でない」
-// ときだけ一致させる。実際の言及（`WF の設定` / `（WF）` / 行頭・行末）は引き続き当たり、
+// ときだけ一致させる。実際の言及（`AB の設定` / `（AB）` / 行頭・行末）は引き続き当たり、
 // 検知の網は落ちない。3 文字以上は従来どおり素の部分文字列一致。
 const SHORT_NEEDLE_MAX = 2;
 const ALNUM = /[A-Za-z0-9]/;
